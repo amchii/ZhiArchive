@@ -3,11 +3,12 @@ import contextlib
 import json
 import os
 import pathlib
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Any, Callable, Coroutine, TypedDict
 from urllib import parse
 
+import aiofiles
 from playwright.async_api import (
     BrowserContext,
     Locator,
@@ -18,9 +19,16 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
 )
+from redis import asyncio as aioredis
 
 from archive.config import default, settings
 from archive.utils import js
+from archive.utils.common import (
+    dt_fromisoformat,
+    dt_str,
+    get_validate_filename,
+    uuid_hex,
+)
 from archive.utils.encoder import JSONEncoder
 
 
@@ -47,23 +55,20 @@ class Target(TypedDict):
     title: str
     link: str
     author: str
-    fetched_at: datetime
+    fetched_at: datetime | str
 
 
 class ActivityMeta(TypedDict):
     action: str
     target_type: str
-    acted_at: datetime
+    acted_at: datetime | str
     raw: list["str"] | None
 
 
 class ActivityItem(TypedDict):
+    id: str
     meta: ActivityMeta
     target: Target
-
-
-def now_str():
-    return datetime.now().strftime("%Y%m%d%H%M%S")
 
 
 def get_correct_target_type(action_text, target_type_text) -> TargetType | None:
@@ -113,22 +118,64 @@ async def get_context(
         yield context
     finally:
         await context.storage_state(path=state_path)
+        await context.close()
+        await browser.close()
+
+
+class ArchiveTask:
+    def __init__(self, activity_info_path):
+        self.activity_path = pathlib.Path(activity_info_path).resolve()
+
+    @property
+    def task_name(self):
+        return str(self.activity_path)
+
+    def as_value(self) -> str:
+        return f"{self.activity_path}"
+
+    @classmethod
+    def from_value(cls, v: str) -> "ArchiveTask":
+        return cls(v)
+
+    def __str__(self):
+        return self.as_value()
+
+    __repr__ = __str__
 
 
 class Base:
+    redis_key_prefix = "zhi_archive:archive"
+    tasks_key = f"{redis_key_prefix}:tasks"  # list
+    tasks_result_key = f"{redis_key_prefix}:task_results"  # hash
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
 
     def __init__(
         self,
         people: str,
         state_path: str | pathlib.Path,
-        page_default_timeout: int = 10 * 1000,
+        page_default_timeout: int = 20 * 1000,
         results_dir: str | pathlib.Path = None,
+        redis_url: str = settings.redis_url,
     ):
         self.people = people
         self.state_path = state_path
         self.page_default_timeout = page_default_timeout
         self._results_dir = results_dir
+        self.redis = aioredis.from_url(
+            redis_url, encoding="utf-8", decode_responses=True
+        )
+
+    @property
+    def personal_key(self):
+        return f"{self.redis_key_prefix}:{self.people}"
+
+    async def push_task(self, task: ArchiveTask):
+        return await self.redis.rpush(self.tasks_key, task.as_value())
+
+    async def pop_task(self) -> ArchiveTask | None:
+        task = await self.redis.lpop(self.tasks_key)
+        if task:
+            return ArchiveTask.from_value(task)
 
     @property
     def results_dir(self):
@@ -189,12 +236,21 @@ class ActivityMonitor(Base):
         fetch_until=datetime.now() - timedelta(days=10),
         person_page_url=None,
         page_default_timeout=10 * 1000,
+        interval=60 * 5,
     ):
         super().__init__(people, state_path, page_default_timeout)
         self.fetch_until = fetch_until
         self.person_page_url = person_page_url or default.person_page_url.format(
             people=people
         )
+        self.interval = interval
+        self.latest_dt = datetime.now()
+
+    @property
+    def activity_dir(self):
+        d = self.results_dir.joinpath("activities")
+        os.makedirs(d, exist_ok=True)
+        return d
 
     async def extract_one(
         self,
@@ -224,6 +280,7 @@ class ActivityMonitor(Base):
         count = 0
         total = await items_locator.count()
         print("start: ", start, "total: ", total)
+        print("until: ", until, "cur_acted_at: ", acted_at)
         for i in range(start, total):
             print(i)
             item_locator = items_locator.nth(i)
@@ -248,10 +305,17 @@ class ActivityMonitor(Base):
                 print(f"忽略该类型: {action_texts}")
                 continue
             acted_at_text = meta_texts[1]
-            acted_at = datetime.fromisoformat(acted_at_text)
+            acted_at = dt_fromisoformat(acted_at_text)
+            if start == 0:
+                print("最新动态时间：", acted_at)
+                self.latest_dt = acted_at
+            if acted_at < until:
+                print(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
+                break
             target = await self.extract_one(item_locator)
             items.append(
                 {
+                    "id": uuid_hex(),
                     "meta": {
                         "action": action_text,
                         "target_type": target_type.value,
@@ -261,12 +325,13 @@ class ActivityMonitor(Base):
                     "target": target,
                 }
             )
-            item_filename = f"{action_text}-{target['title']}.png"
-            await item_locator.screenshot(
-                path=self.results_dir.joinpath(item_filename), type="png"
+            item_filename = get_validate_filename(
+                f"{action_text}-{target['title']}.png"
             )
-            if acted_at < until:
-                break
+            await item_locator.screenshot(
+                path=self.activity_dir.joinpath(item_filename), type="png"
+            )
+
         return items, count, acted_at
 
     async def fetch(self, until: datetime, page: Page) -> list["ActivityItem"]:
@@ -281,6 +346,9 @@ class ActivityMonitor(Base):
             )
             start += count
             items.extend(_items)
+            if cur_acted_at < until:
+                print(f"本次fetch最早动态时间：{cur_acted_at} 早于停止时间：{until}, 将停止")
+                break
             await page.keyboard.press("End")
             try:
                 await page.locator(settings.activity_item_selector).nth(start).locator(
@@ -297,6 +365,7 @@ class ActivityMonitor(Base):
         return items
 
     async def _run(self, playwright, headless=True, **context_extra):
+        print("Starting a new fetch loop...")
         async with self.get_context(
             playwright,
             browser_headless=headless,
@@ -306,11 +375,17 @@ class ActivityMonitor(Base):
             page.set_default_timeout(self.page_default_timeout)
             await self.goto(page, self.person_page_url)
             results = await self.fetch(self.fetch_until, page)
-            filename = f"{now_str()}.json"
-            with open(self.results_dir.joinpath(filename), "w") as fp:
+            filename = f"{dt_str()}.json"
+            filepath = self.activity_dir.joinpath(filename)
+            with open(filepath, "w") as fp:
                 json.dump(results, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
-            await page.pause()
-        return results
+            self.fetch_until = self.latest_dt
+            if results:
+                print("Push task to task list")
+                await self.push_task(ArchiveTask(filepath))
+            print("Done, wait for next fetch loop")
+        await asyncio.sleep(self.interval)
+        await self._run(playwright, headless, **context_extra)
 
     async def run(self, headless=True, **context_extra):
         async with async_playwright() as playwright:
@@ -318,26 +393,52 @@ class ActivityMonitor(Base):
 
 
 class Archiver(Base):
+    @property
+    def archive_dir(self):
+        return self.results_dir.joinpath("archive")
+
+    def get_date_dir(self, dt: date) -> pathlib.Path:
+        date_dir = self.archive_dir.joinpath(dt.strftime("%Y/%m/%d"))
+        os.makedirs(date_dir, exist_ok=True)
+        return date_dir
+
     async def store_one(self, item: ActivityItem, context: BrowserContext):
         # 每个对象都新开一个标签页
-        page = await self.new_page(context)
         target = item["target"]
+        meta = item["meta"]
         if not target["link"]:
             return
         r = parse.urlparse(target["link"])
         url = "https://" + "".join(r[1:])
+        page = await self.new_page(context)
         await self.goto(page, url)
         await page.wait_for_timeout(timeout=100)
-        filename = f"{item['meta']['action']}-{target['title']}.png"
-        await page.screenshot(
-            path=self.results_dir.joinpath(filename), type="png", full_page=True
-        )
-        await page.close()
+
+        now = datetime.now()
+        acted_at = dt_fromisoformat(meta["acted_at"])
+        title = get_validate_filename(f"{item['meta']['action']}-{target['title']}")
+        target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
+        screenshot_path = target_dir.joinpath(f"{title}.png")
+        await page.screenshot(path=screenshot_path, type="png", full_page=True)
+        info = {
+            "title": target["title"],
+            "url": url,
+            "author": target["author"],
+            "shot_at": now,
+        }
+        info_path = target_dir.joinpath("info.json")
+        async with aiofiles.open(info_path, "w", encoding="utf-8") as fp:
+            await fp.write(
+                json.dumps(info, ensure_ascii=False, indent=2, cls=JSONEncoder)
+            )
+        await page.keyboard.press("PageDown")
+        await asyncio.sleep(0.5)
+        await page.keyboard.press("PageDown")
 
     async def store(
         self,
         playwright,
-        items_list: list["ActivityItem"],
+        item_list: list["ActivityItem"],
         headless=True,
         **context_extra,
     ):
@@ -347,16 +448,28 @@ class Archiver(Base):
             **context_extra,
         ) as context:
             empty_page = await self.new_page(context)
-            for item in items_list:
+            for item in item_list:
                 await self.store_one(item, context)
                 await asyncio.sleep(0.3)
             await empty_page.close()
 
     async def run(
         self,
-        items_list: list["ActivityItem"],
         headless=True,
         **context_extra,
     ):
         async with async_playwright() as playwright:
-            return await self.store(playwright, items_list, headless, **context_extra)
+            while True:
+                try:
+                    if task := await self.pop_task():
+                        print(task)
+                        async with aiofiles.open(
+                            task.activity_path, encoding="utf-8"
+                        ) as fp:
+                            item_list = json.loads(await fp.read())
+                        await self.store(
+                            playwright, item_list, headless, **context_extra
+                        )
+                except Exception as e:
+                    print(e)
+                await asyncio.sleep(1)

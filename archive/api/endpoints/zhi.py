@@ -68,5 +68,5 @@ async def login_state(prefix: str):
 async def qrcode_scan_status(prefix: str):
     qrcode_task = get_qrcode_task(prefix)
     client = ZhiLoginClient()
-    status = await client.get_qrcode_task_status(qrcode_task.task_key)
+    status = await client.get_qrcode_task_status(qrcode_task.task_name)
     return {"status": status}

@@ -35,7 +35,7 @@ class QRCodeTask:
         self.state_path = pathlib.Path(state_path).resolve()
 
     @property
-    def task_key(self) -> str:
+    def task_name(self) -> str:
         return str(self.qrcode_path)
 
     def as_value(self) -> str:
@@ -71,16 +71,16 @@ class Base:
             return
         return QRCodeTask.from_value(task)
 
-    async def get_qrcode_task_status(self, task_key: str) -> QRCodeTaskStatus:
-        status = await self.redis.hget(self.qrcode_task_result_key, task_key)
+    async def get_qrcode_task_status(self, task_name: str) -> QRCodeTaskStatus:
+        status = await self.redis.hget(self.qrcode_task_result_key, task_name)
         try:
             return QRCodeTaskStatus(status)
         except ValueError:
             return QRCodeTaskStatus.NO_EXIST
 
-    async def set_qrcode_task_status(self, task_key: str, status: QRCodeTaskStatus):
+    async def set_qrcode_task_status(self, task_name: str, status: QRCodeTaskStatus):
         result = await self.redis.hset(
-            self.qrcode_task_result_key, task_key, status.value
+            self.qrcode_task_result_key, task_name, status.value
         )
         return result
 
@@ -113,7 +113,7 @@ class ZhiLogin(Base):
         qrcode_path = task.qrcode_path
         if (
             qrcode_path
-            and (await self.get_qrcode_task_status(task.task_key))
+            and (await self.get_qrcode_task_status(task.task_name))
             == QRCodeTaskStatus.NO_EXIST
         ):
             return task
@@ -156,13 +156,13 @@ class ZhiLogin(Base):
         await init_context(context)
         async with context:
             await self.set_qrcode_task_status(
-                qrcode_task.task_key, QRCodeTaskStatus.PENDING
+                qrcode_task.task_name, QRCodeTaskStatus.PENDING
             )
             page = await context.new_page()
             await page.goto("https://www.zhihu.com/signin?next=%2F")
             _ = await self._wait_qrcode(page)
             img_bytes = await self._wait_qrcode(page, qrcode_task.qrcode_path)
 
-            await self._wait_for_login_success(page, qrcode_task.task_key)
+            await self._wait_for_login_success(page, qrcode_task.task_name)
             await context.storage_state(path=qrcode_task.state_path)
             return img_bytes
