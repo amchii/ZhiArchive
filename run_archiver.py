@@ -8,7 +8,7 @@ async def main():
     archiver = Archiver(
         settings.people, settings.states_dir.joinpath(default.state_file)
     )
-    await archiver.run(headless=False)
+    await archiver.run(headless=settings.archiver_headless)
 
 
 if __name__ == "__main__":

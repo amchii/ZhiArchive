@@ -11,7 +11,7 @@ async def main():
         settings.states_dir.joinpath(default.state_file),
         fetch_until=datetime.now(),
     )
-    await monitor.run(headless=False)
+    await monitor.run(headless=settings.monitor_headless)
 
 
 if __name__ == "__main__":

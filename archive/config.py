@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     context_default_timeout: int = 10 * 1000  # 10s
     algorithm: str = "HS256"
     redis_url: str = "redis://127.0.0.1:6379"
+    archiver_headless: bool = True
+    monitor_headless: bool = True
 
     class Config:
         env_file = ".env"
