@@ -14,6 +14,7 @@ class default:  # noqa
 
 class Settings(BaseSettings):
     debug: bool = False
+    secret_key: str = "unsafe secret key"
     root_dir: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
     results_dir: pathlib.Path = root_dir.joinpath("results")
     states_dir: pathlib.Path = root_dir.joinpath("states")
@@ -21,9 +22,21 @@ class Settings(BaseSettings):
     activity_item_selector: str = default.activity_item_selector
     person_page_url: str = default.person_page_url.format(people=people)
     context_default_timeout: int = 10 * 1000  # 10s
+    algorithm: str = "HS256"
+    redis_url: str = "redis://127.0.0.1:6379"
 
     class Config:
         env_file = ".env"
 
 
+class APISettings(BaseSettings):
+    username: str
+    password: str
+    cookies_max_age: int = 60 * 60 * 24 * 30
+
+    class Config:
+        env_file = ".apienv"
+
+
 settings = Settings()
+api_settings = APISettings()

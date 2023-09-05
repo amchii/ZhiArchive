@@ -1,0 +1,72 @@
+import os
+import time
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel
+
+from archive.api.render import templates
+from archive.api.security import verify_user_from_cookie
+from archive.config import settings
+from archive.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
+
+router = APIRouter(dependencies=[Depends(verify_user_from_cookie)])
+
+
+def get_qrcode_task(prefix: str) -> QRCodeTask:
+    return QRCodeTask(
+        settings.states_dir.joinpath(f"{prefix}.qrcode.png"),
+        settings.states_dir.joinpath(f"{prefix}.state.json"),
+    )
+
+
+class QRCodeTaskResponse(BaseModel):
+    qrcode: str
+
+
+class QRCodeScanStatusResponse(BaseModel):
+    status: QRCodeTaskStatus
+
+
+@router.get("/login", response_class=HTMLResponse)
+async def login_view(request: Request):
+    return templates.TemplateResponse("qrcode.html", context={"request": request})
+
+
+@router.get("/login/qrcode/new", response_model=QRCodeTaskResponse)
+async def new_login_qrcode():
+    td: str
+    prefix = os.urandom(10).hex()
+    qrcode_task = get_qrcode_task(prefix)
+    client = ZhiLoginClient()
+    await client.new_task(qrcode_task)
+    return {"qrcode": prefix}
+
+
+@router.get("/login/qrcode/{prefix}", response_class=FileResponse)
+async def login_qrcode(prefix: str, timeout: int = 10):
+    start = time.perf_counter()
+    qrcode_task = get_qrcode_task(prefix)
+    qrcode_path = qrcode_task.qrcode_path
+    while start + timeout > time.perf_counter():
+        if qrcode_path.exists():
+            return FileResponse(qrcode_path)
+    raise HTTPException(status_code=404)
+
+
+@router.get("/login/state/{prefix}", response_class=FileResponse)
+async def login_state(prefix: str):
+    qrcode_task = get_qrcode_task(prefix)
+    if not qrcode_task.state_path.exists():
+        raise HTTPException(status_code=404)
+    return FileResponse(qrcode_task.state_path)
+
+
+@router.get(
+    "/login/qrcode/{prefix}/scan_status", response_model=QRCodeScanStatusResponse
+)
+async def qrcode_scan_status(prefix: str):
+    qrcode_task = get_qrcode_task(prefix)
+    client = ZhiLoginClient()
+    status = await client.get_qrcode_task_status(qrcode_task.task_key)
+    return {"status": status}

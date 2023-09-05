@@ -155,14 +155,14 @@ class Base:
 
     @contextlib.asynccontextmanager
     async def get_context(
-        self, playwright: Playwright, browser_headless=True, **extra
+        self, playwright: Playwright, browser_headless=True, **context_extra
     ) -> BrowserContext:
         async with get_context(
             playwright,
             self.state_path,
             browser_headless,
             init=self.init_context,
-            **extra,
+            **context_extra,
         ) as context:
             yield context
 

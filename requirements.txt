@@ -6,24 +6,73 @@
 #
 --index-url https://mirrors.aliyun.com/pypi/simple/
 
+aiofiles==23.2.1
+    # via ZhiArchive (setup.py)
 annotated-types==0.5.0
     # via pydantic
+anyio==4.0.0
+    # via
+    #   starlette
+    #   watchfiles
+cffi==1.15.1
+    # via cryptography
+click==8.1.7
+    # via uvicorn
+cryptography==41.0.3
+    # via ZhiArchive (setup.py)
+fastapi==0.103.0
+    # via ZhiArchive (setup.py)
 greenlet==2.0.2
     # via playwright
+h11==0.14.0
+    # via uvicorn
+httptools==0.6.0
+    # via uvicorn
+idna==3.4
+    # via anyio
+jinja2==3.1.2
+    # via ZhiArchive (setup.py)
+markupsafe==2.1.3
+    # via jinja2
 playwright==1.36.0
     # via ZhiArchive (setup.py)
+pycparser==2.21
+    # via cffi
 pydantic==2.3.0
-    # via pydantic-settings
+    # via
+    #   fastapi
+    #   pydantic-settings
 pydantic-core==2.6.3
     # via pydantic
 pydantic-settings==2.0.3
     # via ZhiArchive (setup.py)
 pyee==9.0.4
     # via playwright
+pyjwt==2.8.0
+    # via ZhiArchive (setup.py)
 python-dotenv==1.0.0
-    # via pydantic-settings
+    # via
+    #   pydantic-settings
+    #   uvicorn
+pyyaml==6.0.1
+    # via uvicorn
+redis==5.0.0
+    # via ZhiArchive (setup.py)
+sniffio==1.3.0
+    # via anyio
+starlette==0.27.0
+    # via fastapi
 typing-extensions==4.7.1
     # via
+    #   fastapi
     #   pydantic
     #   pydantic-core
     #   pyee
+uvicorn[standard]==0.23.2
+    # via ZhiArchive (setup.py)
+uvloop==0.17.0
+    # via uvicorn
+watchfiles==0.20.0
+    # via uvicorn
+websockets==11.0.3
+    # via uvicorn

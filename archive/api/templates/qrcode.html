@@ -1,0 +1,74 @@
+{# ChatGPT协助的 #}
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <title>二维码页面</title>
+    <style>
+        #qrcode {
+            margin: 30px auto;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+<div id="qrcode">
+    <img id="qrimage" src="" alt="二维码">
+    <p id="status"></p>
+</div>
+
+<script>
+  // 用于存储轮询定时器的变量
+  let timer;
+
+  // 请求二维码接口
+  function requestQRCode() {
+    // 发起请求并获取二维码的URL
+    // 请将以下示例中的 URL 替换为您实际的二维码接口 URL
+    fetch('/zhi/login/qrcode/new', {
+      method: 'GET'
+    })
+      .then(response => response.json())
+      .then(data => {
+        console.log(data)
+        // 将获取的二维码URL设置到img元素中
+        document.getElementById('qrimage').src = "/zhi/login/qrcode/" + data.qrcode + "?timeout=10";
+        // 开始轮询用户扫码状态
+        pollUserScanStatus(data.qrcode);
+      })
+      .catch(error => {
+        console.error('请求二维码接口失败', error);
+      });
+  }
+
+  // 轮询用户扫码状态
+  function pollUserScanStatus(qrcode) {
+    // 每2秒钟轮询一次
+    timer = setInterval(() => {
+      // 发起请求并获取用户扫码状态
+      // 用户扫码状态接口 URL
+      fetch("/zhi/login/qrcode/" + qrcode + "/scan_status", {
+        method: 'GET'
+      })
+        .then(response => response.json())
+        .then(data => {
+          // 根据用户扫码状态处理逻辑
+          if (data.status === "ok") {
+            clearInterval(timer); // 停止轮询
+            document.getElementById('status').textContent = '用户已完成扫码，正在跳转...';
+            // 跳转的页面 URL
+            window.location.href = '/zhi/login/state/' + qrcode;
+          } else {
+            document.getElementById('status').textContent = '等待用户扫码...';
+          }
+        })
+        .catch(error => {
+          console.error('轮询扫码状态接口失败', error);
+        });
+    }, 2000);
+  }
+
+  // 页面加载完成后开始请求二维码接口
+  window.addEventListener('load', requestQRCode);
+</script>
+</body>
+</html>

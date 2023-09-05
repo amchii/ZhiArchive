@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>登录</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <style>
+        body {
+            background-color: #f5f5f5;
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+            margin-top: 50px;
+        }
+
+        form {
+            background-color: #fff;
+            border-radius: 5px;
+            display: inline-block;
+            margin-top: 30px;
+            padding: 20px;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+        }
+
+        input[type=text], input[type=password] {
+            border-radius: 3px;
+            border: 1px solid #ccc;
+            box-sizing: border-box;
+            font-size: 16px;
+            padding: 10px;
+            width: 100%;
+        }
+
+        input[type=submit] {
+            background-color: #4CAF50;
+            border: none;
+            border-radius: 3px;
+            color: white;
+            cursor: pointer;
+            font-size: 18px;
+            padding: 10px 20px;
+            margin-top: 20px;
+            width: auto;
+        }
+
+        input[type=submit]:hover {
+            background-color: #3e8e41;
+        }
+
+        div.toast {
+            position: absolute;
+            top: 20%;
+            left: 30%;
+            background-color: skyblue;
+            color: red;
+        }
+
+        .error-message {
+            background-color: #ffe7e7;
+            border: 1px solid #ff4d4f;
+            color: #ff4d4f;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+
+    </style>
+
+    <script>
+      function showError(message) {
+        const errorMessage = document.getElementById("error-message");
+        errorMessage.innerText = message;
+        errorMessage.style.display = "inline-block";
+      }
+
+      function submitForm(event) {
+        event.preventDefault();
+
+        let username = document.getElementById("username").value;
+        let password = document.getElementById("password").value;
+
+        let data = {"username": username, "password": password};
+
+        fetch('{{ login_url }}', {
+          method: 'POST',
+          body: JSON.stringify(data),
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        })
+          .then(response => {
+            if (response.status <= 299) {
+              window.location = "/";
+              return "登录成功";
+            } else if (response.status === 401) {
+              return response.text();
+            } else {
+              return "用户名或密码错误";
+            }
+          }).then(error => {
+          showError(error);
+        });
+      }
+
+      document.addEventListener('DOMContentLoaded', function () {
+        document.getElementById("login-form").addEventListener("submit", submitForm);
+      });
+    </script>
+
+
+</head>
+
+<body>
+
+<h1>登录</h1>
+<div class="toast">
+    {% if toast %}
+        <p>{{ toast }}</p>
+    {% endif %}
+</div>
+<div id="error-message" class="error-message" style="display: none"></div>
+<br>
+
+<form id="login-form">
+    <label for="username">用户名:</label>
+    <input type="text" id="username" name="username"><br><br>
+
+    <label for="password">密码:</label>
+    <input type="password" id="password" name="password" autocomplete="true"><br><br>
+
+    <input type="submit" value="登录">
+</form>
+</body>
+</html>
