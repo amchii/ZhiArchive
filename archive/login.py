@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import pathlib
 from enum import Enum
 from urllib import parse
@@ -13,6 +14,8 @@ from redis import asyncio as aioredis
 
 from .config import settings
 from .core import init_context
+
+logger = logging.getLogger("archive")
 
 
 def at_home(url):
@@ -47,7 +50,7 @@ class QRCodeTask:
         return cls(qrcode_path, state_path)
 
     def __str__(self):
-        return self.as_value()
+        return f"{self.__class__.__name__}<{self.as_value()}>"
 
     __repr__ = __str__
 
@@ -124,10 +127,10 @@ class ZhiLogin(Base):
             while True:
                 try:
                     if qrcode_task := await self.get_new_req():
-                        print(qrcode_task)
+                        logger.info(f"new qrcode task: {qrcode_task}")
                         await self.get_qrcode(playwright, qrcode_task)
                 except Exception as e:
-                    print(e)
+                    logger.exception(e)
                 await asyncio.sleep(1)
 
     async def _wait_for_login_success(self, page: Page, task_key: str):

@@ -1,5 +1,6 @@
 import pathlib
 
+from pydantic import constr
 from pydantic_settings import BaseSettings
 
 
@@ -26,6 +27,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://127.0.0.1:6379"
     archiver_headless: bool = True
     monitor_headless: bool = True
+    log_level: constr(to_upper=True) = "INFO"
+    log_dir: pathlib.Path = root_dir.joinpath("logs")
 
     class Config:
         env_file = ".env"
