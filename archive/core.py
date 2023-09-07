@@ -106,6 +106,7 @@ async def init_context(context: BrowserContext):
 async def get_context(
     playwright: Playwright,
     state_path: str | pathlib.Path,
+    state_auto_save: bool = True,
     browser_headless=True,
     init: Callable[[BrowserContext], Coroutine[Any, Any, BrowserContext]]
     | None = init_context,
@@ -121,7 +122,8 @@ async def get_context(
     try:
         yield context
     finally:
-        await context.storage_state(path=state_path)
+        if state_auto_save:
+            await context.storage_state(path=state_path)
         await context.close()
         await browser.close()
 
@@ -149,6 +151,7 @@ class ArchiveTask:
 
 class Base:
     redis_key_prefix = "zhi_archive:archive"
+    state_path_key = f"{redis_key_prefix}:state_path"
     tasks_key = f"{redis_key_prefix}:tasks"  # list
     tasks_result_key = f"{redis_key_prefix}:task_results"  # hash
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
@@ -156,13 +159,13 @@ class Base:
     def __init__(
         self,
         people: str,
-        state_path: str | pathlib.Path,
+        init_state_path: str | pathlib.Path,
         page_default_timeout: int = 20 * 1000,
         results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
     ):
         self.people = people
-        self.state_path = state_path
+        self.init_state_path = init_state_path
         self.page_default_timeout = page_default_timeout
         self._results_dir = results_dir
         self.redis = aioredis.from_url(
@@ -172,6 +175,16 @@ class Base:
     @property
     def personal_key(self):
         return f"{self.redis_key_prefix}:{self.people}"
+
+    async def get_state_path_from_redis(self) -> pathlib.Path | None:
+        path = await self.redis.get(self.state_path_key)
+        return pathlib.Path(path) if path else None
+
+    async def set_state_path_to_redis(self, path: str | pathlib.Path):
+        await self.redis.set(self.state_path_key, str(path))
+
+    async def get_state_path(self):
+        return await self.get_state_path_from_redis() or self.init_state_path
 
     async def push_task(self, task: ArchiveTask):
         return await self.redis.rpush(self.tasks_key, task.as_value())
@@ -201,16 +214,22 @@ class Base:
 
     async def init_context(self, context: BrowserContext) -> BrowserContext:
         await init_context(context)
-        await context.route(self.batch_url_match, abort_with("failed"))
         return context
 
     @contextlib.asynccontextmanager
     async def get_context(
-        self, playwright: Playwright, browser_headless=True, **context_extra
+        self,
+        playwright: Playwright,
+        state_auto_save: bool = True,
+        browser_headless=True,
+        **context_extra,
     ) -> BrowserContext:
+        state_path = await self.get_state_path()
+        logger.info(f"Currently used state path: {state_path}")
         async with get_context(
             playwright,
-            self.state_path,
+            state_path,
+            state_auto_save,
             browser_headless,
             init=self.init_context,
             **context_extra,
@@ -240,13 +259,13 @@ class ActivityMonitor(Base):
     def __init__(
         self,
         people: str,
-        state_path,
+        init_state_path,
         fetch_until=datetime.now() - timedelta(days=10),
         person_page_url=None,
         page_default_timeout=10 * 1000,
         interval=60 * 5,
     ):
-        super().__init__(people, state_path, page_default_timeout)
+        super().__init__(people, init_state_path, page_default_timeout)
         self.fetch_until = fetch_until
         self.person_page_url = person_page_url or default.person_page_url.format(
             people=people
