@@ -44,6 +44,7 @@ class Action(str, Enum):
     ANSWER = "回答"
     POST_ARTICLE = "发表"
     POST_PIN = "发布"
+    COLLECT = "收藏"
     # 其他的不关心
 
 
@@ -77,7 +78,7 @@ class ActivityItem(TypedDict):
 def get_correct_target_type(action_text, target_type_text) -> TargetType | None:
     try:
         action = Action(action_text)
-        if action == Action.AGREE:
+        if action in (Action.AGREE, Action.COLLECT):
             return TargetType(target_type_text)
         elif action == Action.ANSWER:
             return TargetType.ANSWER
