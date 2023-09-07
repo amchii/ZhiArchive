@@ -220,8 +220,9 @@ class Base:
     async def goto(self, page: Page, url, **kwargs):
         response = await page.goto(url, **kwargs)
         if await self.is_abnormal(response):
-            dt = datetime.now().strftime("%Y%m%d%H%M%S")
-            await page.screenshot(path=f"异常{dt}.png", full_page=True)
+            await page.screenshot(
+                path=settings.results_dir.joinpath(f"异常{dt_str()}.png"), full_page=True
+            )
             raise AbnormalError(f"{url}: \n{await response.text()}")
         return response
 
@@ -230,6 +231,9 @@ class Base:
         if all([abnormal_text in text for abnormal_text in self.abnormal_texts]):
             return True
         return False
+
+    async def handle_abnormal(self, *args, **kwargs):
+        pass
 
 
 class ActivityMonitor(Base):
@@ -386,15 +390,22 @@ class ActivityMonitor(Base):
                 json.dump(results, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
             self.fetch_until = self.latest_dt
             if results:
-                logger.info("Push task to task list")
+                logger.info("Push a task to task list")
                 await self.push_task(ArchiveTask(filepath))
             logger.info("Done, wait for next fetch loop")
-        await asyncio.sleep(self.interval)
-        await self._run(playwright, headless, **context_extra)
+            return results
 
     async def run(self, headless=True, **context_extra):
         async with async_playwright() as playwright:
-            return await self._run(playwright, headless, **context_extra)
+            while True:
+                try:
+                    await self._run(playwright, headless, **context_extra)
+                except AbnormalError as e:
+                    logger.error(e)
+                    await self.handle_abnormal()
+                except Exception as e:
+                    logger.exception(e)
+                await asyncio.sleep(self.interval)
 
 
 class Archiver(Base):
