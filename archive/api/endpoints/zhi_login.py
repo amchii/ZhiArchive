@@ -28,12 +28,23 @@ class QRCodeScanStatusResponse(BaseModel):
     status: QRCodeTaskStatus
 
 
-@router.get("/login", response_class=HTMLResponse)
+class QRCodeInfo(BaseModel):
+    qrcode_path: str
+    state_path: str
+
+
+@router.get("", response_class=HTMLResponse)
 async def login_view(request: Request):
     return templates.TemplateResponse("qrcode.html", context={"request": request})
 
 
-@router.get("/login/qrcode/new", response_model=QRCodeTaskResponse)
+@router.get("/qrcode/{prefix}/info", response_model=QRCodeInfo)
+async def qrcode_info(prefix: str):
+    task = get_qrcode_task(prefix)
+    return {"qrcode_path": task.qrcode_path, "state_path": task.state_path}
+
+
+@router.get("/qrcode/new", response_model=QRCodeTaskResponse)
 async def new_login_qrcode():
     td: str
     prefix = os.urandom(10).hex()
@@ -43,7 +54,7 @@ async def new_login_qrcode():
     return {"qrcode": prefix}
 
 
-@router.get("/login/qrcode/{prefix}", response_class=FileResponse)
+@router.get("/qrcode/{prefix}", response_class=FileResponse)
 async def login_qrcode(prefix: str, timeout: int = 10):
     start = time.perf_counter()
     qrcode_task = get_qrcode_task(prefix)
@@ -54,7 +65,7 @@ async def login_qrcode(prefix: str, timeout: int = 10):
     raise HTTPException(status_code=404)
 
 
-@router.get("/login/state/{prefix}", response_class=FileResponse)
+@router.get("/state/{prefix}", response_class=FileResponse)
 async def login_state(prefix: str):
     qrcode_task = get_qrcode_task(prefix)
     if not qrcode_task.state_path.exists():
@@ -62,9 +73,7 @@ async def login_state(prefix: str):
     return FileResponse(qrcode_task.state_path)
 
 
-@router.get(
-    "/login/qrcode/{prefix}/scan_status", response_model=QRCodeScanStatusResponse
-)
+@router.get("/qrcode/{prefix}/scan_status", response_model=QRCodeScanStatusResponse)
 async def qrcode_scan_status(prefix: str):
     qrcode_task = get_qrcode_task(prefix)
     client = ZhiLoginClient()

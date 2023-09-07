@@ -183,7 +183,7 @@ class Base:
     async def set_state_path_to_redis(self, path: str | pathlib.Path):
         await self.redis.set(self.state_path_key, str(path))
 
-    async def get_state_path(self):
+    async def get_state_path(self) -> pathlib.Path | str:
         return await self.get_state_path_from_redis() or self.init_state_path
 
     async def push_task(self, task: ArchiveTask):
@@ -253,6 +253,13 @@ class Base:
 
     async def handle_abnormal(self, *args, **kwargs):
         pass
+
+
+class APIClient(Base):
+    def __init__(self):
+        super().__init__(
+            settings.people, settings.states_dir.joinpath(default.state_file)
+        )
 
 
 class ActivityMonitor(Base):
