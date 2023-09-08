@@ -2,15 +2,15 @@ import json
 import os
 
 import aiofiles
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from archive.api.security import verify_user_from_cookie
 from archive.core import APIClient
 
-from .zhi_login import get_qrcode_task
+from . import PauseStatus
+from .login import get_qrcode_task
 
-router = APIRouter(dependencies=[Depends(verify_user_from_cookie)])
+router = APIRouter()
 
 
 class StatePath(BaseModel):
@@ -40,3 +40,19 @@ async def new_state(state: str):
     async with aiofiles.open(task.state_path, "w", encoding="utf-8") as fp:
         await fp.write(state)
     return {"path": str(task.state_path)}
+
+
+@router.put("/{name}/pause", response_model=PauseStatus)
+async def pause(name: str, status: PauseStatus):
+    client = APIClient(name)
+    if status.pause:
+        await client.pause()
+    else:
+        await client.resume()
+    return {"pause": await client.need_pause()}
+
+
+@router.get("/{name}/pause", response_model=PauseStatus)
+async def pause_status(name: str):
+    client = APIClient(name)
+    return {"pause": await client.need_pause()}

@@ -6,7 +6,7 @@ from archive.core import Archiver
 
 async def main():
     archiver = Archiver(
-        settings.people, settings.states_dir.joinpath(default.state_file)
+        settings.people, settings.states_dir.joinpath(default.state_file), interval=1
     )
     await archiver.run(headless=settings.archiver_headless)
 

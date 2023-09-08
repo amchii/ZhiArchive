@@ -150,6 +150,7 @@ class ArchiveTask:
 
 
 class Base:
+    name = ""
     redis_key_prefix = "zhi_archive:archive"
     state_path_key = f"{redis_key_prefix}:state_path"
     tasks_key = f"{redis_key_prefix}:tasks"  # list
@@ -163,6 +164,7 @@ class Base:
         page_default_timeout: int = 20 * 1000,
         results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
+        interval: int = 10,
     ):
         self.people = people
         self.init_state_path = init_state_path
@@ -171,6 +173,7 @@ class Base:
         self.redis = aioredis.from_url(
             redis_url, encoding="utf-8", decode_responses=True
         )
+        self.interval = interval
 
     @property
     def personal_key(self):
@@ -254,15 +257,56 @@ class Base:
     async def handle_abnormal(self, *args, **kwargs):
         pass
 
+    @property
+    def pause_key(self):
+        return f"{self.redis_key_prefix}:{self.name}:pause"
+
+    async def pause(self):
+        return await self.redis.set(self.pause_key, 1)
+
+    async def resume(self):
+        return await self.redis.set(self.pause_key, 0)
+
+    async def need_pause(self) -> bool:
+        return int(await self.redis.get(self.pause_key) or 0) == 1
+
+    async def _run(self, playwright, headless=True, **context_extra):
+        raise NotImplementedError
+
+    async def run(
+        self,
+        headless=True,
+        **context_extra,
+    ):
+        logger.info(f"{self.name} started.")
+        async with async_playwright() as playwright:
+            while True:
+                if await self.need_pause():
+                    logger.info(f"{self.name} pausing")
+                    while await self.need_pause():
+                        await asyncio.sleep(1)
+                    logger.info(f"{self.name} resumed")
+                try:
+                    await self._run(playwright, headless, **context_extra)
+                except AbnormalError as e:
+                    logger.error(e)
+                    await self.handle_abnormal()
+                except Exception as e:
+                    logger.exception(e)
+                await asyncio.sleep(self.interval)
+
 
 class APIClient(Base):
-    def __init__(self):
+    def __init__(self, as_: str = None):
+        self.name = as_ or self.name
         super().__init__(
             settings.people, settings.states_dir.joinpath(default.state_file)
         )
 
 
 class ActivityMonitor(Base):
+    name = "monitor"
+
     def __init__(
         self,
         people: str,
@@ -272,12 +316,13 @@ class ActivityMonitor(Base):
         page_default_timeout=10 * 1000,
         interval=60 * 5,
     ):
-        super().__init__(people, init_state_path, page_default_timeout)
+        super().__init__(
+            people, init_state_path, page_default_timeout, interval=interval
+        )
         self.fetch_until = fetch_until
         self.person_page_url = person_page_url or default.person_page_url.format(
             people=people
         )
-        self.interval = interval
         self.latest_dt = datetime.now()
 
     @property
@@ -421,20 +466,10 @@ class ActivityMonitor(Base):
             logger.info("Done, wait for next fetch loop")
             return results
 
-    async def run(self, headless=True, **context_extra):
-        async with async_playwright() as playwright:
-            while True:
-                try:
-                    await self._run(playwright, headless, **context_extra)
-                except AbnormalError as e:
-                    logger.error(e)
-                    await self.handle_abnormal()
-                except Exception as e:
-                    logger.exception(e)
-                await asyncio.sleep(self.interval)
-
 
 class Archiver(Base):
+    name = "archiver"
+
     @property
     def archive_dir(self):
         return self.results_dir.joinpath("archive")
@@ -495,23 +530,9 @@ class Archiver(Base):
                 await asyncio.sleep(0.3)
             await empty_page.close()
 
-    async def run(
-        self,
-        headless=True,
-        **context_extra,
-    ):
-        async with async_playwright() as playwright:
-            while True:
-                try:
-                    if task := await self.pop_task():
-                        logger.info(f"new archive task: {task}")
-                        async with aiofiles.open(
-                            task.activity_path, encoding="utf-8"
-                        ) as fp:
-                            item_list = json.loads(await fp.read())
-                        await self.store(
-                            playwright, item_list, headless, **context_extra
-                        )
-                except Exception as e:
-                    logger.exception(e)
-                await asyncio.sleep(1)
+    async def _run(self, playwright, headless=True, **context_extra):
+        if task := await self.pop_task():
+            logger.info(f"new archive task: {task}")
+            async with aiofiles.open(task.activity_path, encoding="utf-8") as fp:
+                item_list = json.loads(await fp.read())
+            await self.store(playwright, item_list, headless, **context_extra)

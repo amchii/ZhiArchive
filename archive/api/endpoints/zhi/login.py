@@ -1,16 +1,15 @@
 import os
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from archive.api.render import templates
-from archive.api.security import verify_user_from_cookie
 from archive.config import settings
 from archive.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
 
-router = APIRouter(dependencies=[Depends(verify_user_from_cookie)])
+router = APIRouter()
 
 
 def get_qrcode_task(prefix: str) -> QRCodeTask:
@@ -46,7 +45,6 @@ async def qrcode_info(prefix: str):
 
 @router.get("/qrcode/new", response_model=QRCodeTaskResponse)
 async def new_login_qrcode():
-    td: str
     prefix = os.urandom(10).hex()
     qrcode_task = get_qrcode_task(prefix)
     client = ZhiLoginClient()
