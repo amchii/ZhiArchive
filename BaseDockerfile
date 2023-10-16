@@ -1,0 +1,7 @@
+FROM mcr.microsoft.com/playwright/python:v1.37.0-jammy
+
+RUN rm -rf webkit* && \
+    pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
+
+COPY ./requirements.txt /root/requirements.txt
+RUN pip install -r /root/requirements.txt

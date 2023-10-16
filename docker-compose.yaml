@@ -1,0 +1,70 @@
+services:
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis-data:/data
+    ports:
+      - "36379:6379"
+    env_file:
+      - .env
+
+  api:
+    image: zhi-archive:latest
+    depends_on: [ redis ]
+    working_dir: /opt/zhi_archive
+    command: bash run_api.sh
+    volumes:
+      - ./:/opt/zhi_archive
+    ports:
+      - "9090:9090"
+    environment:
+      redis_host: redis
+      redis_port: 6379
+    env_file:
+      - .env
+      - .apienv
+
+
+  login_worker:
+    image: zhi-archive:latest
+    depends_on: [ redis ]
+    working_dir: /opt/zhi_archive
+    command: python run_login_worker.py
+    volumes:
+      - ./:/opt/zhi_archive
+    environment:
+      redis_host: redis
+      redis_port: 6379
+    env_file:
+      - .env
+
+
+  monitor:
+    image: zhi-archive:latest
+    depends_on: [ redis ]
+    working_dir: /opt/zhi_archive
+    command: python run_monitor.py
+    volumes:
+      - ./:/opt/zhi_archive
+    environment:
+      redis_host: redis
+      redis_port: 6379
+    env_file:
+      - .env
+
+
+  archiver:
+    image: zhi-archive:latest
+    depends_on: [ redis ]
+    working_dir: /opt/zhi_archive
+    command: python run_archiver.py
+    volumes:
+      - ./:/opt/zhi_archive
+    environment:
+      redis_host: redis
+      redis_port: 6379
+    env_file:
+      - .env
+
+volumes:
+  redis-data:

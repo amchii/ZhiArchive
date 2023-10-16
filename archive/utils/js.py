@@ -1,6 +1,6 @@
-set_webdriver_js_script = (
-    """Object.defineProperty(navigator, "webdriver", {"value": undefined})"""
-)
+set_webdriver_js_script = """Object.defineProperty(navigator, "webdriver", {
+  get: () => false,
+})"""
 
 scroll_to_end_js_script = """
 async () => {

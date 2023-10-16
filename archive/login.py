@@ -5,6 +5,7 @@ from enum import Enum
 from urllib import parse
 
 from playwright.async_api import (
+    Browser,
     Page,
     Playwright,
     TimeoutError as PlaywrightTimeoutError,
@@ -14,6 +15,7 @@ from redis import asyncio as aioredis
 
 from .config import settings
 from .core import init_context
+from .env import user_agent
 
 logger = logging.getLogger("archive")
 
@@ -62,7 +64,10 @@ class Base:
 
     def __init__(self, redis_url: str = settings.redis_url):
         self.redis = aioredis.from_url(
-            redis_url, encoding="utf-8", decode_responses=True
+            redis_url,
+            password=settings.redis_passwd,
+            encoding="utf-8",
+            decode_responses=True,
         )
 
     async def new_task(self, task: QRCodeTask):
@@ -107,6 +112,7 @@ class ZhiLogin(Base):
         super().__init__(redis_url)
         self.scan_timeout = scan_timeout
         self.headless = headless
+        context_extra.setdefault("user_agent", user_agent)
         self.context_extra = context_extra
 
     async def get_new_req(self) -> QRCodeTask | None:
@@ -154,7 +160,9 @@ class ZhiLogin(Base):
         playwright: Playwright,
         qrcode_task: QRCodeTask,
     ) -> bytes:
-        browser = await playwright.chromium.launch(headless=self.headless)
+        browser: Browser = await getattr(playwright, settings.browser.value).launch(
+            headless=self.headless
+        )
         context = await browser.new_context(**self.context_extra)
         await init_context(context)
         async with context:

@@ -1,4 +1,5 @@
 import pathlib
+from enum import Enum
 
 from pydantic import constr
 from pydantic_settings import BaseSettings
@@ -13,6 +14,11 @@ class default:  # noqa
     state_file = "zhihu.state.json"
 
 
+class Browser(str, Enum):
+    CHROMIUM = "chromium"
+    FIREFOX = "firefox"
+
+
 class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "unsafe secret key"
@@ -24,14 +30,21 @@ class Settings(BaseSettings):
     person_page_url: str = default.person_page_url.format(people=people)
     context_default_timeout: int = 10 * 1000  # 10s
     algorithm: str = "HS256"
-    redis_url: str = "redis://127.0.0.1:6379"
+    redis_host: str = "127.0.0.1"
+    redis_port: int = 6379
+    redis_passwd: str | None = None
     archiver_headless: bool = True
     monitor_headless: bool = True
     log_level: constr(to_upper=True) = "INFO"
     log_dir: pathlib.Path = root_dir.joinpath("logs")
+    browser: Browser = Browser.CHROMIUM
 
     class Config:
         env_file = ".env"
+
+    @property
+    def redis_url(self):
+        return f"redis://{self.redis_host}:{self.redis_port}"
 
 
 class APISettings(BaseSettings):

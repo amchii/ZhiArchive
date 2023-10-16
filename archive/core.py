@@ -11,6 +11,7 @@ from urllib import parse
 
 import aiofiles
 from playwright.async_api import (
+    Browser,
     BrowserContext,
     Locator,
     Page,
@@ -23,6 +24,7 @@ from playwright.async_api import (
 from redis import asyncio as aioredis
 
 from archive.config import default, settings
+from archive.env import user_agent
 from archive.utils import js
 from archive.utils.common import (
     dt_fromisoformat,
@@ -113,9 +115,14 @@ async def get_context(
     locale="zh-CN",
     **extra,
 ) -> BrowserContext:
-    browser = await playwright.chromium.launch(headless=browser_headless)
+    browser: Browser = await getattr(playwright, settings.browser.value).launch(
+        headless=browser_headless
+    )
     context = await browser.new_context(
-        storage_state=state_path, locale=locale, **extra
+        storage_state=state_path,
+        locale=locale,
+        **extra,
+        user_agent=user_agent,
     )
     if init:
         await init(context)
@@ -171,7 +178,10 @@ class Base:
         self.page_default_timeout = page_default_timeout
         self._results_dir = results_dir
         self.redis = aioredis.from_url(
-            redis_url, encoding="utf-8", decode_responses=True
+            redis_url,
+            password=settings.redis_passwd,
+            encoding="utf-8",
+            decode_responses=True,
         )
         self.interval = interval
 
@@ -240,6 +250,7 @@ class Base:
             yield context
 
     async def goto(self, page: Page, url, **kwargs):
+        logger.info(f"Goto: {url}")
         response = await page.goto(url, **kwargs)
         if await self.is_abnormal(response):
             await page.screenshot(
@@ -249,13 +260,15 @@ class Base:
         return response
 
     async def is_abnormal(self, response: Response) -> bool:
-        text = await response.text()
-        if all([abnormal_text in text for abnormal_text in self.abnormal_texts]):
+        r = parse.urlparse(response.url)
+        if "account/unhuman" in r.path:
+            logger.error("流量异常")
             return True
         return False
 
     async def handle_abnormal(self, *args, **kwargs):
-        pass
+        logger.info("出现异常，暂停运行")
+        await self.pause()
 
     @property
     def pause_key(self):
