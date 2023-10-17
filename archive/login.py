@@ -61,6 +61,7 @@ class Base:
     redis_key_prefix = "zhi_archive:login"
     qrcode_task_key = f"{redis_key_prefix}:qrcode_task"
     qrcode_task_result_key = f"{redis_key_prefix}:qrcode_task_result"
+    task_timeout = 60 * 5
 
     def __init__(self, redis_url: str = settings.redis_url):
         self.redis = aioredis.from_url(
@@ -71,7 +72,9 @@ class Base:
         )
 
     async def new_task(self, task: QRCodeTask):
-        await self.redis.set(self.qrcode_task_key, task.as_value())
+        await self.redis.set(
+            self.qrcode_task_key, task.as_value(), ex=self.task_timeout
+        )
 
     async def get_qrcode_task(self) -> QRCodeTask | None:
         task = await self.redis.get(self.qrcode_task_key)
@@ -129,6 +132,7 @@ class ZhiLogin(Base):
         return
 
     async def run(self):
+        logger.info("Starting login worker...")
         async with async_playwright() as playwright:
             while True:
                 try:

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from archive.config import default, settings
 from archive.core import ActivityMonitor
@@ -9,7 +9,7 @@ async def main():
     monitor = ActivityMonitor(
         settings.people,
         settings.states_dir.joinpath(default.state_file),
-        fetch_until=datetime.now(),
+        fetch_until=datetime.now() - timedelta(days=10),
     )
     await monitor.run(headless=settings.monitor_headless)
 

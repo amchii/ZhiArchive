@@ -25,7 +25,6 @@ from redis import asyncio as aioredis
 
 from archive.config import default, settings
 from archive.env import user_agent
-from archive.utils import js
 from archive.utils.common import (
     dt_fromisoformat,
     dt_str,
@@ -33,6 +32,7 @@ from archive.utils.common import (
     uuid_hex,
 )
 from archive.utils.encoder import JSONEncoder
+from archive.utils.stealth import stealth_async
 
 logger = logging.getLogger("archive")
 
@@ -100,7 +100,7 @@ def abort_with(error_code: str = None):
 
 async def init_context(context: BrowserContext):
     context.set_default_timeout(settings.context_default_timeout)
-    await context.add_init_script(js.set_webdriver_js_script)
+    await stealth_async(context)
     return context
 
 
@@ -168,12 +168,16 @@ class Base:
         self,
         people: str,
         init_state_path: str | pathlib.Path,
+        person_page_url=None,
         page_default_timeout: int = 20 * 1000,
         results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
         interval: int = 10,
     ):
         self.people = people
+        self.person_page_url = person_page_url or default.person_page_url.format(
+            people=people
+        )
         self.init_state_path = init_state_path
         self.page_default_timeout = page_default_timeout
         self._results_dir = results_dir
@@ -330,12 +334,13 @@ class ActivityMonitor(Base):
         interval=60 * 5,
     ):
         super().__init__(
-            people, init_state_path, page_default_timeout, interval=interval
+            people,
+            init_state_path,
+            person_page_url,
+            page_default_timeout,
+            interval=interval,
         )
         self.fetch_until = fetch_until
-        self.person_page_url = person_page_url or default.person_page_url.format(
-            people=people
-        )
         self.latest_dt = datetime.now()
 
     @property
@@ -373,10 +378,10 @@ class ActivityMonitor(Base):
         total = await items_locator.count()
         logger.info(f"start: {start}, total: {total}")
         logger.info(
-            f"until: {until}, cur_acted_at: {acted_at}",
+            f"停止时间: {until}, 当前动态时间: {acted_at}",
         )
         for i in range(start, total):
-            logger.info(i)
+            logger.info(f"Item index: {i}")
             item_locator = items_locator.nth(i)
             meta_locator = item_locator.locator("div.ActivityItem-meta")
             meta_texts = await meta_locator.locator("span").all_text_contents()
@@ -399,13 +404,14 @@ class ActivityMonitor(Base):
                 continue
             acted_at_text = meta_texts[1]
             acted_at = dt_fromisoformat(acted_at_text)
-            if start == 0:
+            if i == 0:
                 logger.info(f"最新动态时间：{acted_at}")
                 self.latest_dt = acted_at
             if acted_at < until:
                 logger.info(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
                 break
             target = await self.extract_one(item_locator)
+            logger.info(f"{action_texts}\n\t{target['title']}")
             items.append(
                 {
                     "id": uuid_hex(),
@@ -492,6 +498,11 @@ class Archiver(Base):
         os.makedirs(date_dir, exist_ok=True)
         return date_dir
 
+    async def referrer_route(self, route: Route):
+        headers = route.request.headers
+        headers["Referer"] = self.person_page_url
+        await route.continue_(headers=headers)
+
     async def store_one(self, item: ActivityItem, context: BrowserContext):
         # 每个对象都新开一个标签页
         target = item["target"]
@@ -501,6 +512,7 @@ class Archiver(Base):
         r = parse.urlparse(target["link"])
         url = "https://" + "".join(r[1:])
         page = await self.new_page(context)
+        await page.route(url, self.referrer_route)
         await self.goto(page, url)
         await page.wait_for_timeout(timeout=100)
 
@@ -538,9 +550,11 @@ class Archiver(Base):
             **context_extra,
         ) as context:
             empty_page = await self.new_page(context)
+            logger.info(f"Will fetch {len(item_list)} items")
             for item in item_list:
                 await self.store_one(item, context)
                 await asyncio.sleep(0.3)
+            logger.info("Fetch done")
             await empty_page.close()
 
     async def _run(self, playwright, headless=True, **context_extra):
