@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     log_level: constr(to_upper=True) = "INFO"
     log_dir: pathlib.Path = root_dir.joinpath("logs")
     browser: Browser = Browser.CHROMIUM
+    monitor_fetch_until: int = 10  # days
 
     class Config:
         env_file = ".env"

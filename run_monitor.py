@@ -9,7 +9,7 @@ async def main():
     monitor = ActivityMonitor(
         settings.people,
         settings.states_dir.joinpath(default.state_file),
-        fetch_until=datetime.now() - timedelta(days=10),
+        fetch_until=datetime.now() - timedelta(days=settings.monitor_fetch_until),
     )
     await monitor.run(headless=settings.monitor_headless)
 
