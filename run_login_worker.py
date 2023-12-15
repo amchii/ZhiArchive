@@ -1,10 +1,11 @@
 import asyncio
 
+from archive.config import settings
 from archive.login import ZhiLogin
 
 
 async def main():
-    login = ZhiLogin(headless=True)
+    login = ZhiLogin(headless=settings.login_worker_headless)
     await login.run()
 
 

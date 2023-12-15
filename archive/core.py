@@ -285,7 +285,7 @@ class Base:
         return await self.redis.set(self.pause_key, 0)
 
     async def need_pause(self) -> bool:
-        return int(await self.redis.get(self.pause_key) or 0) == 1
+        return int(await self.redis.get(self.pause_key) or 1) == 1
 
     async def _run(self, playwright, headless=True, **context_extra):
         raise NotImplementedError
@@ -456,8 +456,16 @@ class ActivityMonitor(Base):
                     timeout=5 * 1000,
                 )
                 logger.info("Load success")
-            except PlaywrightTimeoutError:
+            except PlaywrightTimeoutError as e:
                 logger.info("Done, due to timeout")
+                logger.exception(e)
+                await page.screenshot(
+                    path=self.results_dir.joinpath(
+                        f"error_{cur_acted_at.strftime('%Y%m%d%H%M%S')}.png"
+                    ),
+                    type="png",
+                    full_page=True,
+                )
                 break
             i += 1
             await asyncio.sleep(0.5)
@@ -480,8 +488,9 @@ class ActivityMonitor(Base):
                 json.dump(results, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
             self.fetch_until = self.latest_dt
             if results:
-                logger.info("Push a task to task list")
-                await self.push_task(ArchiveTask(filepath))
+                task = ArchiveTask(filepath)
+                logger.info(f"Push a task {task} to task list")
+                await self.push_task(task)
             logger.info("Done, wait for next fetch loop")
             return results
 

@@ -153,7 +153,7 @@ class ZhiLogin(Base):
             await page.close()
 
     async def _wait_qrcode(self, page: Page, qrcode_path: pathlib.Path | str = None):
-        img_bytes = await page.locator("img.Qrcode-qrcode").screenshot(
+        img_bytes = await page.locator("div.Qrcode-img").screenshot(
             type="png", path=qrcode_path
         )
         if len(img_bytes) < 4096 + 100:

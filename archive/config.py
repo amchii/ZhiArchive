@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     redis_passwd: str | None = None
     archiver_headless: bool = True
     monitor_headless: bool = True
+    login_worker_headless: bool = True
     log_level: constr(to_upper=True) = "INFO"
     log_dir: pathlib.Path = root_dir.joinpath("logs")
     browser: Browser = Browser.CHROMIUM

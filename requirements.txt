@@ -37,6 +37,10 @@ markupsafe==2.1.3
 pathvalidate==3.1.0
     # via ZhiArchive (setup.py)
 playwright==1.37.0
+    # via
+    #   ZhiArchive (setup.py)
+    #   playwright-stealth
+playwright-stealth==1.0.6
     # via ZhiArchive (setup.py)
 pycparser==2.21
     # via cffi
