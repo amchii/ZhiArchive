@@ -1,4 +1,14 @@
 FROM mcr.microsoft.com/playwright/python:v1.37.0-jammy
+SHELL ["/bin/bash", "-c"]
+
+RUN echo $'deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy main restricted universe multiverse\n\
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-updates main restricted universe multiverse\n\
+deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ jammy-backports main restricted universe multiverse\n\
+deb http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse' > /etc/apt/sources.list
+
+ENV TZ=Asia/Shanghai
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+RUN apt-get update && apt-get install -y tzdata
 
 RUN rm -rf webkit* && \
     pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
