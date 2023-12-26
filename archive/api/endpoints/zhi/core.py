@@ -1,6 +1,6 @@
 import json
 import os
-from enum import ReprEnum
+from enum import Enum
 
 import aiofiles
 from fastapi import APIRouter, HTTPException
@@ -14,9 +14,12 @@ from .login import get_qrcode_task
 router = APIRouter()
 
 
-class WorkerName(str, ReprEnum):
+class WorkerName(str, Enum):
     MONITOR = "monitor"
     ARCHIVER = "archiver"
+
+    def __str__(self):
+        return str(self.value)
 
 
 class StatePath(BaseModel):
