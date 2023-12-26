@@ -304,6 +304,7 @@ class Base:
                         await asyncio.sleep(1)
                     logger.info(f"{self.name} resumed")
                 try:
+                    logger.debug(f"{self.name}: New loop")
                     await self._run(playwright, headless, **context_extra)
                 except AbnormalError as e:
                     logger.error(e)
@@ -370,18 +371,20 @@ class ActivityMonitor(Base):
         return {"title": title, "link": link, "author": author, "fetched_at": now}
 
     async def fetch_once(
-        self, until: datetime, page: Page, start: int = 0, acted_at=datetime.now()
+        self, until: datetime, page: Page, start: int = 0, acted_at=None
     ) -> tuple[list["ActivityItem"], int, datetime]:
         items_locator = page.locator(settings.activity_item_selector)
         items: list[ActivityItem] = []
         count = 0
         total = await items_locator.count()
-        logger.info(f"start: {start}, total: {total}")
+        logger.info(f"本次动态起点: {start}, 共{total}条")
         logger.info(
-            f"停止时间: {until}, 当前动态时间: {acted_at}",
+            f"抓取停止时间: {until}, 起点动态时间: {acted_at or '无'}",
         )
+        acted_at = acted_at or datetime.now()
+        latest_one_index = 0
         for i in range(start, total):
-            logger.info(f"Item index: {i}")
+            logger.info(f"动态序号: {i}")
             item_locator = items_locator.nth(i)
             meta_locator = item_locator.locator("div.ActivityItem-meta")
             meta_texts = await meta_locator.locator("span").all_text_contents()
@@ -394,24 +397,26 @@ class ActivityMonitor(Base):
                 .get_by_text("置顶")
                 .count()
             ):
+                latest_one_index += 1
                 logger.warning("忽略置顶")
                 continue
             action_texts = meta_texts[0]
+            acted_at_text = meta_texts[1]
+            acted_at = dt_fromisoformat(acted_at_text)
+            if i == latest_one_index:
+                logger.info(f"最新动态时间：{acted_at}")
+                self.latest_dt = acted_at
+            # 动态时间（e.g. 2023-12-25 16:58)只精确到秒，如果停止时间的那秒有多条动态，则会遗漏
+            if acted_at <= until:
+                logger.info(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
+                break
             action_text, target_type_text = action_texts.split("了")
             target_type = get_correct_target_type(action_text, target_type_text)
             if target_type is None:
                 logger.warning(f"忽略该类型: {action_texts}")
                 continue
-            acted_at_text = meta_texts[1]
-            acted_at = dt_fromisoformat(acted_at_text)
-            if i == 0:
-                logger.info(f"最新动态时间：{acted_at}")
-                self.latest_dt = acted_at
-            if acted_at < until:
-                logger.info(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
-                break
             target = await self.extract_one(item_locator)
-            logger.info(f"{action_texts}\n\t{target['title']}")
+            logger.info(f"于{acted_at_text} {action_texts}\n\t{target['title']}")
             items.append(
                 {
                     "id": uuid_hex(),
@@ -438,16 +443,18 @@ class ActivityMonitor(Base):
         start = 0
         items = []
         i = 1
-        while cur_acted_at >= until:
-            logger.info(f"第{i}次fetch")
+        logger.info("按动态页从上至下（从新向旧）抓取...")
+        while cur_acted_at > until:
+            logger.info(f"第{i}次抓取")
             _items, count, cur_acted_at = await self.fetch_once(
                 until, page, start, cur_acted_at
             )
             start += count
             items.extend(_items)
-            if cur_acted_at < until:
-                logger.info(f"本次fetch最早动态时间：{cur_acted_at} 早于停止时间：{until}, 将停止")
+            if cur_acted_at <= until:
+                logger.info(f"本次抓取最早动态时间：{cur_acted_at} 早于停止时间：{until}, 将停止")
                 break
+            logger.info("Press End.")
             await page.keyboard.press("End")
             try:
                 await page.locator(settings.activity_item_selector).nth(start).locator(
@@ -468,8 +475,20 @@ class ActivityMonitor(Base):
                 )
                 break
             i += 1
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(1)
+        self.fetch_until = self.latest_dt
         return items
+
+    async def save_and_push(self, items: list["ActivityItem"]):
+        filename = f"{dt_str()}.json"
+        filepath = self.activity_dir.joinpath(filename)
+        with open(filepath, "w") as fp:
+            json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
+            logger.info(f"Save {len(items)} items to {filepath}.")
+        if items:
+            task = ArchiveTask(filepath)
+            await self.push_task(task)
+            logger.info(f"Push a task {task} to task list")
 
     async def _run(self, playwright, headless=True, **context_extra):
         logger.info("Starting a new fetch loop...")
@@ -482,15 +501,7 @@ class ActivityMonitor(Base):
             page.set_default_timeout(self.page_default_timeout)
             await self.goto(page, self.person_page_url)
             results = await self.fetch(self.fetch_until, page)
-            filename = f"{dt_str()}.json"
-            filepath = self.activity_dir.joinpath(filename)
-            with open(filepath, "w") as fp:
-                json.dump(results, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
-            self.fetch_until = self.latest_dt
-            if results:
-                task = ArchiveTask(filepath)
-                logger.info(f"Push a task {task} to task list")
-                await self.push_task(task)
+            await self.save_and_push(results)
             logger.info("Done, wait for next fetch loop")
             return results
 
@@ -530,6 +541,7 @@ class Archiver(Base):
         title = get_validate_filename(f"{item['meta']['action']}-{target['title']}")
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
         screenshot_path = target_dir.joinpath(f"{title}.png")
+        logger.info(f"Saving screenshot to {screenshot_path}.")
         await page.screenshot(path=screenshot_path, type="png", full_page=True)
         info = {
             "title": target["title"],
@@ -562,7 +574,7 @@ class Archiver(Base):
             logger.info(f"Will fetch {len(item_list)} items")
             for item in item_list:
                 await self.store_one(item, context)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(1)
             logger.info("Fetch done")
             await empty_page.close()
 

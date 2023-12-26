@@ -10,6 +10,7 @@ async def main():
         settings.people,
         settings.states_dir.joinpath(default.state_file),
         fetch_until=datetime.now() - timedelta(days=settings.monitor_fetch_until),
+        interval=settings.monitor_interval,
     )
     await monitor.run(headless=settings.monitor_headless)
 

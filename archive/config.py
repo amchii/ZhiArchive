@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     log_dir: pathlib.Path = root_dir.joinpath("logs")
     browser: Browser = Browser.CHROMIUM
     monitor_fetch_until: int = 10  # days
+    monitor_interval: int = 60 * 5  # seconds
 
     class Config:
         env_file = ".env"

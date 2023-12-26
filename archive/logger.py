@@ -4,7 +4,7 @@ from logging.handlers import RotatingFileHandler
 from archive.config import settings
 
 verbose_formatter = logging.Formatter(
-    "[%(levelname)s] [%(name)s] %(asctime)s %(filename)s %(levelno)s %(message)s"
+    "[%(levelname)s] [%(name)s] %(asctime)s %(filename)s %(lineno)s %(message)s"
 )
 
 logger = logging.getLogger("archive")

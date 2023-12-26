@@ -1,5 +1,6 @@
 import json
 import os
+from enum import ReprEnum
 
 import aiofiles
 from fastapi import APIRouter, HTTPException
@@ -11,6 +12,11 @@ from . import PauseStatus
 from .login import get_qrcode_task
 
 router = APIRouter()
+
+
+class WorkerName(str, ReprEnum):
+    MONITOR = "monitor"
+    ARCHIVER = "archiver"
 
 
 class StatePath(BaseModel):
@@ -43,7 +49,7 @@ async def new_state(state: str):
 
 
 @router.put("/{name}/pause", response_model=PauseStatus)
-async def pause(name: str, status: PauseStatus):
+async def pause(name: WorkerName, status: PauseStatus):
     client = APIClient(name)
     if status.pause:
         await client.pause()
@@ -53,6 +59,6 @@ async def pause(name: str, status: PauseStatus):
 
 
 @router.get("/{name}/pause", response_model=PauseStatus)
-async def pause_status(name: str):
+async def pause_status(name: WorkerName):
     client = APIClient(name)
     return {"pause": await client.need_pause()}
