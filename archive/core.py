@@ -480,15 +480,17 @@ class ActivityMonitor(Base):
         return items
 
     async def save_and_push(self, items: list["ActivityItem"]):
+        if not items:
+            logger.info("No items, will do nothing.")
+            return
         filename = f"{dt_str()}.json"
         filepath = self.activity_dir.joinpath(filename)
         with open(filepath, "w") as fp:
             json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
             logger.info(f"Save {len(items)} items to {filepath}.")
-        if items:
-            task = ArchiveTask(filepath)
-            await self.push_task(task)
-            logger.info(f"Push a task {task} to task list")
+        task = ArchiveTask(filepath)
+        await self.push_task(task)
+        logger.info(f"Push a task {task} to task list")
 
     async def _run(self, playwright, headless=True, **context_extra):
         logger.info("Starting a new fetch loop...")
