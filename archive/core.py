@@ -34,7 +34,7 @@ from archive.utils.common import (
 from archive.utils.encoder import JSONEncoder
 from archive.utils.stealth import stealth_async
 
-logger = logging.getLogger("archive")
+logger = logging.getLogger("default")
 
 
 class AbnormalError(Exception):
@@ -188,6 +188,7 @@ class Base:
             decode_responses=True,
         )
         self.interval = interval
+        self.logger = logging.getLogger(self.name)
 
     @property
     def personal_key(self):
@@ -295,22 +296,22 @@ class Base:
         headless=True,
         **context_extra,
     ):
-        logger.info(f"{self.name} started.")
+        self.logger.info(f"{self.name} started.")
         async with async_playwright() as playwright:
             while True:
                 if await self.need_pause():
-                    logger.info(f"{self.name} pausing")
+                    self.logger.info(f"{self.name} pausing")
                     while await self.need_pause():
                         await asyncio.sleep(1)
-                    logger.info(f"{self.name} resumed")
+                    self.logger.info(f"{self.name} resumed")
                 try:
-                    logger.debug(f"{self.name}: New loop")
+                    self.logger.debug(f"{self.name}: New loop")
                     await self._run(playwright, headless, **context_extra)
                 except AbnormalError as e:
-                    logger.error(e)
+                    self.logger.error(e)
                     await self.handle_abnormal()
                 except Exception as e:
-                    logger.exception(e)
+                    self.logger.exception(e)
                 await asyncio.sleep(self.interval)
 
 
@@ -377,14 +378,14 @@ class ActivityMonitor(Base):
         items: list[ActivityItem] = []
         count = 0
         total = await items_locator.count()
-        logger.info(f"本次动态起点: {start}, 共{total}条")
-        logger.info(
+        self.logger.info(f"本次动态起点: {start}, 共{total}条")
+        self.logger.info(
             f"抓取停止时间: {until}, 起点动态时间: {acted_at or '无'}",
         )
         acted_at = acted_at or datetime.now()
         latest_one_index = 0
         for i in range(start, total):
-            logger.info(f"动态序号: {i}")
+            self.logger.info(f"动态序号: {i}")
             item_locator = items_locator.nth(i)
             meta_locator = item_locator.locator("div.ActivityItem-meta")
             meta_texts = await meta_locator.locator("span").all_text_contents()
@@ -398,25 +399,25 @@ class ActivityMonitor(Base):
                 .count()
             ):
                 latest_one_index += 1
-                logger.warning("忽略置顶")
+                self.logger.warning("忽略置顶")
                 continue
             action_texts = meta_texts[0]
             acted_at_text = meta_texts[1]
             acted_at = dt_fromisoformat(acted_at_text)
             if i == latest_one_index:
-                logger.info(f"最新动态时间：{acted_at}")
+                self.logger.info(f"最新动态时间：{acted_at}")
                 self.latest_dt = acted_at
             # 动态时间（e.g. 2023-12-25 16:58)只精确到秒，如果停止时间的那秒有多条动态，则会遗漏
             if acted_at <= until:
-                logger.info(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
+                self.logger.info(f"当前动态时间：{acted_at} 早于停止时间：{until}, 将停止本次抓取")
                 break
             action_text, target_type_text = action_texts.split("了")
             target_type = get_correct_target_type(action_text, target_type_text)
             if target_type is None:
-                logger.warning(f"忽略该类型: {action_texts}")
+                self.logger.warning(f"忽略该类型: {action_texts}")
                 continue
             target = await self.extract_one(item_locator)
-            logger.info(f"于{acted_at_text} {action_texts}\n\t{target['title']}")
+            self.logger.info(f"于{acted_at_text} {action_texts}\n\t{target['title']}")
             items.append(
                 {
                     "id": uuid_hex(),
@@ -443,18 +444,18 @@ class ActivityMonitor(Base):
         start = 0
         items = []
         i = 1
-        logger.info("按动态页从上至下（从新向旧）抓取...")
+        self.logger.info("按动态页从上至下（从新向旧）抓取...")
         while cur_acted_at > until:
-            logger.info(f"第{i}次抓取")
+            self.logger.info(f"第{i}次抓取")
             _items, count, cur_acted_at = await self.fetch_once(
                 until, page, start, cur_acted_at
             )
             start += count
             items.extend(_items)
             if cur_acted_at <= until:
-                logger.info(f"本次抓取最早动态时间：{cur_acted_at} 早于停止时间：{until}, 将停止")
+                self.logger.info(f"本次抓取最早动态时间：{cur_acted_at} 早于停止时间：{until}, 将停止")
                 break
-            logger.info("Press End.")
+            self.logger.info("Press End.")
             await page.keyboard.press("End")
             try:
                 await page.locator(settings.activity_item_selector).nth(start).locator(
@@ -462,10 +463,10 @@ class ActivityMonitor(Base):
                 ).wait_for(
                     timeout=5 * 1000,
                 )
-                logger.info("Load success")
+                self.logger.info("Load success")
             except PlaywrightTimeoutError as e:
-                logger.info("Done, due to timeout")
-                logger.exception(e)
+                self.logger.info("Done, due to timeout")
+                self.logger.exception(e)
                 await page.screenshot(
                     path=self.results_dir.joinpath(
                         f"error_{cur_acted_at.strftime('%Y%m%d%H%M%S')}.png"
@@ -481,19 +482,19 @@ class ActivityMonitor(Base):
 
     async def save_and_push(self, items: list["ActivityItem"]):
         if not items:
-            logger.info("No items, will do nothing.")
+            self.logger.info("No items, will do nothing.")
             return
         filename = f"{dt_str()}.json"
         filepath = self.activity_dir.joinpath(filename)
         with open(filepath, "w") as fp:
             json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
-            logger.info(f"Save {len(items)} items to {filepath}.")
+            self.logger.info(f"Save {len(items)} items to {filepath}.")
         task = ArchiveTask(filepath)
         await self.push_task(task)
-        logger.info(f"Push a task {task} to task list")
+        self.logger.info(f"Push a task {task} to task list")
 
     async def _run(self, playwright, headless=True, **context_extra):
-        logger.info("Starting a new fetch loop...")
+        self.logger.info("Starting a new fetch loop...")
         async with self.get_context(
             playwright,
             browser_headless=headless,
@@ -504,7 +505,7 @@ class ActivityMonitor(Base):
             await self.goto(page, self.person_page_url)
             results = await self.fetch(self.fetch_until, page)
             await self.save_and_push(results)
-            logger.info("Done, wait for next fetch loop")
+            self.logger.info("Done, wait for next fetch loop")
             return results
 
 
@@ -543,7 +544,7 @@ class Archiver(Base):
         title = get_validate_filename(f"{item['meta']['action']}-{target['title']}")
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
         screenshot_path = target_dir.joinpath(f"{title}.png")
-        logger.info(f"Saving screenshot to {screenshot_path}.")
+        self.logger.info(f"Saving screenshot to {screenshot_path}.")
         await page.screenshot(path=screenshot_path, type="png", full_page=True)
         info = {
             "title": target["title"],
@@ -573,16 +574,16 @@ class Archiver(Base):
             **context_extra,
         ) as context:
             empty_page = await self.new_page(context)
-            logger.info(f"Will fetch {len(item_list)} items")
+            self.logger.info(f"Will fetch {len(item_list)} items")
             for item in item_list:
                 await self.store_one(item, context)
                 await asyncio.sleep(1)
-            logger.info("Fetch done")
+            self.logger.info("Fetch done")
             await empty_page.close()
 
     async def _run(self, playwright, headless=True, **context_extra):
         if task := await self.pop_task():
-            logger.info(f"new archive task: {task}")
+            self.logger.info(f"new archive task: {task}")
             async with aiofiles.open(task.activity_path, encoding="utf-8") as fp:
                 item_list = json.loads(await fp.read())
             await self.store(playwright, item_list, headless, **context_extra)

@@ -17,7 +17,7 @@ from .config import settings
 from .core import init_context
 from .env import user_agent
 
-logger = logging.getLogger("archive")
+logger = logging.getLogger("login_worker")
 
 
 def at_home(url):
