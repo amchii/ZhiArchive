@@ -13,9 +13,10 @@ from playwright.async_api import (
 )
 from redis import asyncio as aioredis
 
-from .config import settings
-from .core import init_context
-from .env import user_agent
+from archive.config import settings
+from archive.env import user_agent
+
+from .base import init_context
 
 logger = logging.getLogger("login_worker")
 
@@ -132,7 +133,7 @@ class ZhiLogin(Base):
         return
 
     async def run(self):
-        logger.info("Starting login worker...")
+        logger.info("Start login worker.")
         async with async_playwright() as playwright:
             while True:
                 try:

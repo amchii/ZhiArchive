@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from archive.config import default, settings
-from archive.core import ActivityMonitor
+from archive.core.monitor import ActivityMonitor
 
 
 async def main():

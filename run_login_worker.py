@@ -1,7 +1,7 @@
 import asyncio
 
 from archive.config import settings
-from archive.login import ZhiLogin
+from archive.core.login import ZhiLogin
 
 
 async def main():

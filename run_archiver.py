@@ -1,7 +1,7 @@
 import asyncio
 
 from archive.config import default, settings
-from archive.core import Archiver
+from archive.core.archiver import Archiver
 
 
 async def main():

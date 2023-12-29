@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from archive.api.render import templates
 from archive.config import settings
-from archive.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
+from archive.core.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
 
 router = APIRouter()
 
