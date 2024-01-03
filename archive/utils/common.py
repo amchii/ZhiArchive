@@ -15,6 +15,10 @@ def dt_fromisoformat(dt: str) -> datetime:
     return datetime.fromisoformat(dt)
 
 
+def dt_toisoformat(dt: datetime) -> str:
+    return dt.isoformat()
+
+
 def get_validate_filename(filename: str) -> str:
     return sanitize_filename(filename, replacement_text="_")
 

@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import pathlib
 from datetime import datetime, timedelta
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
@@ -10,26 +11,31 @@ from archive.core.base import (
     ActivityItem,
     ArchiveTask,
     Base,
+    Cfg,
     Target,
     get_correct_target_type,
 )
 from archive.utils.common import (
     dt_fromisoformat,
     dt_str,
+    dt_toisoformat,
     get_validate_filename,
     uuid_hex,
 )
 from archive.utils.encoder import JSONEncoder
 
 
-class ActivityMonitor(Base):
+class Monitor(Base):
     name = "monitor"
+    configurable = Base.configurable + [
+        Cfg("fetch_until", dt_toisoformat, dt_fromisoformat, read_only=True)
+    ]
 
     def __init__(
         self,
-        people: str,
-        init_state_path,
-        fetch_until=datetime.now() - timedelta(days=10),
+        people: str = None,
+        init_state_path: str | pathlib.Path = None,
+        fetch_until: datetime = datetime.now() - timedelta(days=10),
         person_page_url=None,
         page_default_timeout=10 * 1000,
         interval=60 * 5,

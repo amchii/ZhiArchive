@@ -1,6 +1,7 @@
 import json
 import os
 from enum import Enum
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, HTTPException
@@ -65,3 +66,16 @@ async def pause(name: WorkerName, status: PauseStatus):
 async def pause_status(name: WorkerName):
     client = APIClient(name)
     return {"pause": await client.need_pause()}
+
+
+@router.get("/{name}/configs")
+async def get_configs(name: WorkerName) -> dict[str, Any]:
+    client = APIClient(name)
+    return await client.get_configs_from_redis()
+
+
+@router.put("/{name}/configs")
+async def set_configs(name: WorkerName, configs: dict[str, Any]):
+    client = APIClient(name)
+    await client.set_configs_to_redis(configs)
+    return configs

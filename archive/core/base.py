@@ -1,11 +1,12 @@
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import pathlib
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Coroutine, TypedDict
+from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
 from urllib import parse
 
 from playwright.async_api import (
@@ -23,8 +24,6 @@ from archive.config import default, settings
 from archive.env import user_agent
 from archive.utils.common import dt_str
 from archive.utils.stealth import stealth_async
-
-logger = logging.getLogger("default")
 
 
 class AbnormalError(Exception):
@@ -146,6 +145,42 @@ class ArchiveTask:
     __repr__ = __str__
 
 
+SerializerT: TypeAlias = Callable[[Any], Any]
+
+
+class Config:
+    def __init__(
+        self,
+        name: str,
+        serializer: SerializerT = None,
+        deserializer: SerializerT = None,
+        read_only=False,
+    ):
+        self.name = name
+        self.serializer = serializer
+        self.deserializer = deserializer
+        self.read_only = read_only
+
+    def to_python(self, value):
+        if self.deserializer:
+            return self.deserializer(value)
+        return value
+
+    def to_jsonable(self, value):
+        if self.deserializer:
+            return self.serializer(value)
+        return value
+
+
+Cfg = Config
+
+
+class WorkStatus(str, Enum):
+    PAUSING = "pausing"  # 暂停中
+    RUNNING = "running"  # 正在运行
+    WAITING = "waiting"  # 正在等待下次运行
+
+
 class Base:
     name = ""
     redis_key_prefix = "zhi_archive:archive"
@@ -153,22 +188,30 @@ class Base:
     tasks_key = f"{redis_key_prefix}:tasks"  # list
     tasks_result_key = f"{redis_key_prefix}:task_results"  # hash
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
+    configurable: list[Cfg] = [
+        Cfg("people"),
+        Cfg("person_page_url"),
+        Cfg("page_default_timeout"),
+        Cfg("interval"),
+    ]
 
     def __init__(
         self,
-        people: str,
-        init_state_path: str | pathlib.Path,
+        people: str = None,
+        init_state_path: str | pathlib.Path = None,
         person_page_url=None,
         page_default_timeout: int = 20 * 1000,
         results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
         interval: int = 10,
     ):
-        self.people = people
+        self.people = people or settings.people
         self.person_page_url = person_page_url or default.person_page_url.format(
             people=people
         )
-        self.init_state_path = init_state_path
+        self.init_state_path = init_state_path or settings.states_dir.joinpath(
+            default.state_file
+        )
         self.page_default_timeout = page_default_timeout
         self._results_dir = results_dir
         self.redis = aioredis.from_url(
@@ -178,11 +221,21 @@ class Base:
             decode_responses=True,
         )
         self.interval = interval
-        self.logger = logging.getLogger(self.name)
+        self.logger = logging.getLogger(self.name or "default")
 
     @property
     def personal_key(self):
         return f"{self.redis_key_prefix}:{self.people}"
+
+    @property
+    def status_key(self):
+        return f"{self.redis_key_prefix}:{self.name}:status"
+
+    async def get_status(self) -> WorkStatus:
+        return WorkStatus(await self.redis.get(self.status_key, WorkStatus.PAUSING))
+
+    async def set_status(self, status: WorkStatus):
+        return await self.redis.set(self.status_key, status.value)
 
     async def get_state_path_from_redis(self) -> pathlib.Path | None:
         path = await self.redis.get(self.state_path_key)
@@ -193,6 +246,44 @@ class Base:
 
     async def get_state_path(self) -> pathlib.Path | str:
         return await self.get_state_path_from_redis() or self.init_state_path
+
+    @property
+    def configs_key(self):
+        return f"{self.redis_key_prefix}:{self.name}:configs"
+
+    def get_configs(self):
+        configs = {}
+        for c in self.configurable:
+            v = getattr(self, c.name, None)
+            configs[c.name] = c.to_jsonable(v)
+        return configs
+
+    def load_configs(self, configs: dict[str, Any]):
+        loaded = {}
+        for c in self.configurable:
+            if not c.read_only and c.name in configs:
+                setattr(self, c.name, c.to_python(configs[c.name]))
+                loaded[c.name] = configs[c.name]
+        return loaded
+
+    async def get_configs_from_redis(self):
+        configs_str = await self.redis.get(self.configs_key)
+        if configs_str:
+            return json.loads(configs_str)
+        return {}
+
+    async def set_configs_to_redis(self, configs: dict[str, Any]):
+        return await self.redis.set(self.configs_key, json.dumps(configs))
+
+    async def load_configs_from_redis(self):
+        configs = await self.get_configs_from_redis()
+        if not configs:
+            self.logger.info("Write configs to redis.")
+            await self.set_configs_to_redis(self.get_configs())
+        else:
+            self.logger.info("Read configs from redis.")
+            self.logger.debug(configs)
+            self.load_configs(configs)
 
     async def push_task(self, task: ArchiveTask):
         return await self.redis.rpush(self.tasks_key, task.as_value())
@@ -233,7 +324,7 @@ class Base:
         **context_extra,
     ) -> BrowserContext:
         state_path = await self.get_state_path()
-        logger.info(f"Currently used state path: {state_path}")
+        self.logger.info(f"Currently used state path: {state_path}")
         async with get_context(
             playwright,
             state_path,
@@ -245,7 +336,7 @@ class Base:
             yield context
 
     async def goto(self, page: Page, url, **kwargs):
-        logger.info(f"Goto: {url}")
+        self.logger.info(f"Goto: {url}")
         response = await page.goto(url, **kwargs)
         if await self.is_abnormal(response):
             await page.screenshot(
@@ -257,12 +348,12 @@ class Base:
     async def is_abnormal(self, response: Response) -> bool:
         r = parse.urlparse(response.url)
         if "account/unhuman" in r.path:
-            logger.error("流量异常")
+            self.logger.error("流量异常")
             return True
         return False
 
     async def handle_abnormal(self, *args, **kwargs):
-        logger.info("出现异常，暂停运行")
+        self.logger.info("出现异常，暂停运行")
         await self.pause()
 
     @property
@@ -296,6 +387,7 @@ class Base:
                     self.logger.info(f"{self.name} resumed")
                 try:
                     self.logger.debug(f"{self.name}: New loop")
+                    await self.load_configs_from_redis()
                     await self._run(playwright, headless, **context_extra)
                 except AbnormalError as e:
                     self.logger.error(e)
@@ -306,8 +398,6 @@ class Base:
 
 
 class APIClient(Base):
-    def __init__(self, as_: str = None):
+    def __init__(self, as_: str = None, people=None, init_state_path=None):
         self.name = as_ or self.name
-        super().__init__(
-            settings.people, settings.states_dir.joinpath(default.state_file)
-        )
+        super().__init__(people, init_state_path)
