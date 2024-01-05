@@ -176,7 +176,6 @@ Cfg = Config
 
 
 class WorkStatus(str, Enum):
-    PAUSING = "pausing"  # 暂停中
     RUNNING = "running"  # 正在运行
     WAITING = "waiting"  # 正在等待下次运行
 
@@ -232,7 +231,7 @@ class Base:
         return f"{self.redis_key_prefix}:{self.name}:status"
 
     async def get_status(self) -> WorkStatus:
-        return WorkStatus(await self.redis.get(self.status_key, WorkStatus.PAUSING))
+        return WorkStatus(await self.redis.get(self.status_key, WorkStatus.WAITING))
 
     async def set_status(self, status: WorkStatus):
         return await self.redis.set(self.status_key, status.value)
@@ -279,11 +278,15 @@ class Base:
         configs = await self.get_configs_from_redis()
         if not configs:
             self.logger.info("Write configs to redis.")
+            current_configs = self.get_configs()
             await self.set_configs_to_redis(self.get_configs())
         else:
             self.logger.info("Read configs from redis.")
             self.logger.debug(configs)
             self.load_configs(configs)
+            current_configs = self.get_configs()
+            await self.set_configs_to_redis(current_configs)
+        self.logger.debug(f"Current configs: {current_configs}")
 
     async def push_task(self, task: ArchiveTask):
         return await self.redis.rpush(self.tasks_key, task.as_value())
@@ -372,6 +375,27 @@ class Base:
     async def _run(self, playwright, headless=True, **context_extra):
         raise NotImplementedError
 
+    async def before_run(self):
+        self.logger.debug("Before run")
+        await self.load_configs_from_redis()
+
+    async def after_run(self):
+        pass
+
+    @contextlib.asynccontextmanager
+    async def rotate(self):
+        if await self.need_pause():
+            self.logger.info(f"{self.name} pausing")
+            while await self.need_pause():
+                await asyncio.sleep(1)
+            self.logger.info(f"{self.name} resumed")
+        await self.before_run()
+        await self.set_status(WorkStatus.RUNNING)
+        yield
+        await self.set_status(WorkStatus.WAITING)
+        await self.after_run()
+        await asyncio.sleep(self.interval)
+
     async def run(
         self,
         headless=True,
@@ -380,21 +404,15 @@ class Base:
         self.logger.info(f"{self.name} started.")
         async with async_playwright() as playwright:
             while True:
-                if await self.need_pause():
-                    self.logger.info(f"{self.name} pausing")
-                    while await self.need_pause():
-                        await asyncio.sleep(1)
-                    self.logger.info(f"{self.name} resumed")
-                try:
-                    self.logger.debug(f"{self.name}: New loop")
-                    await self.load_configs_from_redis()
-                    await self._run(playwright, headless, **context_extra)
-                except AbnormalError as e:
-                    self.logger.error(e)
-                    await self.handle_abnormal()
-                except Exception as e:
-                    self.logger.exception(e)
-                await asyncio.sleep(self.interval)
+                async with self.rotate():
+                    try:
+                        self.logger.debug(f"{self.name}: New loop")
+                        await self._run(playwright, headless, **context_extra)
+                    except AbnormalError as e:
+                        self.logger.error(e)
+                        await self.handle_abnormal()
+                    except Exception as e:
+                        self.logger.exception(e)
 
 
 class APIClient(Base):
