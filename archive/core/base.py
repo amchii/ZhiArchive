@@ -282,7 +282,7 @@ class Base:
             current_configs = self.get_configs()
             await self.set_configs_to_redis(self.get_configs())
         else:
-            self.logger.info("Read configs from redis.")
+            self.logger.debug("Read configs from redis.")
             self.logger.debug(configs)
             self.load_configs(configs)
             current_configs = self.get_configs()
