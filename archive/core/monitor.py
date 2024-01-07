@@ -93,12 +93,14 @@ class Monitor(Base):
             count += 1
             # 忽略置顶
             if (
-                await item_locator.locator("div.ContentItem h2.ContentItem-title span")
+                await item_locator.locator(
+                    "div.ContentItem span.ActivityItem-StickyMark"
+                )
                 .get_by_text("置顶")
                 .count()
             ):
                 latest_one_index += 1
-                self.logger.warning("忽略置顶")
+                self.logger.warning(f"忽略置顶项：{meta_texts}")
                 continue
             action_texts = meta_texts[0]
             acted_at_text = meta_texts[1]
