@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import pathlib
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
 from urllib import parse
@@ -182,6 +182,7 @@ class WorkStatus(str, Enum):
 
 class Base:
     name = ""
+    output_name = ""
     redis_key_prefix = "zhi_archive:archive"
     state_path_key = f"{redis_key_prefix}:state_path"
     tasks_key = f"{redis_key_prefix}:tasks"  # list
@@ -200,19 +201,19 @@ class Base:
         init_state_path: str | pathlib.Path = None,
         person_page_url=None,
         page_default_timeout: int = 20 * 1000,
-        results_dir: str | pathlib.Path = None,
+        base_results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
         interval: int = 10,
     ):
         self.people = people or settings.people
         self.person_page_url = person_page_url or default.person_page_url.format(
-            people=people
+            people=self.people
         )
         self.init_state_path = init_state_path or settings.states_dir.joinpath(
             default.state_file
         )
         self.page_default_timeout = page_default_timeout
-        self._results_dir = results_dir
+        self._base_results_dir = base_results_dir or settings.results_dir
         self.redis = aioredis.from_url(
             redis_url,
             password=settings.redis_passwd,
@@ -298,10 +299,14 @@ class Base:
 
     @property
     def results_dir(self):
-        if not self._results_dir:
-            self._results_dir = settings.results_dir.joinpath(f"{self.people}")
-        os.makedirs(self._results_dir, exist_ok=True)
-        return self._results_dir
+        r = self._base_results_dir.joinpath(self.people, self.output_name)
+        os.makedirs(r, exist_ok=True)
+        return r
+
+    def get_date_dir(self, dt: date) -> pathlib.Path:
+        date_dir = self.results_dir.joinpath(dt.strftime("%Y/%m/%d"))
+        os.makedirs(date_dir, exist_ok=True)
+        return date_dir
 
     @classmethod
     def batch_url_match(cls, url: str) -> bool:

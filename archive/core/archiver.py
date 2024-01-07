@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
-import pathlib
-from datetime import date, datetime
+from datetime import datetime
 from urllib import parse
 
 import aiofiles
@@ -15,15 +13,7 @@ from archive.utils.encoder import JSONEncoder
 
 class Archiver(Base):
     name = "archiver"
-
-    @property
-    def archive_dir(self):
-        return self.results_dir.joinpath("archive")
-
-    def get_date_dir(self, dt: date) -> pathlib.Path:
-        date_dir = self.archive_dir.joinpath(dt.strftime("%Y/%m/%d"))
-        os.makedirs(date_dir, exist_ok=True)
-        return date_dir
+    output_name = "archives"
 
     async def referrer_route(self, route: Route):
         headers = route.request.headers

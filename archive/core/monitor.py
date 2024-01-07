@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import pathlib
 from datetime import datetime, timedelta
 
@@ -27,6 +26,7 @@ from archive.utils.encoder import JSONEncoder
 
 class Monitor(Base):
     name = "monitor"
+    output_name = "activities"
     configurable = Base.configurable + [
         Cfg("fetch_until", dt_toisoformat, dt_fromisoformat, read_only=True)
     ]
@@ -49,12 +49,6 @@ class Monitor(Base):
         )
         self.fetch_until = fetch_until
         self.latest_dt = datetime.now()
-
-    @property
-    def activity_dir(self):
-        d = self.results_dir.joinpath("activities")
-        os.makedirs(d, exist_ok=True)
-        return d
 
     async def extract_one(
         self,
@@ -138,8 +132,9 @@ class Monitor(Base):
             item_filename = get_validate_filename(
                 f"{action_text}-{target['title']}.png"
             )
+            target_dir = self.get_date_dir(acted_at.date())
             await item_locator.screenshot(
-                path=self.activity_dir.joinpath(item_filename), type="png"
+                path=target_dir.joinpath(item_filename), type="png"
             )
 
         return items, count, acted_at
@@ -190,7 +185,7 @@ class Monitor(Base):
             self.logger.info("No items, will do nothing.")
             return
         filename = f"{dt_str()}.json"
-        filepath = self.activity_dir.joinpath(filename)
+        filepath = self.results_dir.joinpath(filename)
         with open(filepath, "w") as fp:
             json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
             self.logger.info(f"Save {len(items)} items to {filepath}.")
