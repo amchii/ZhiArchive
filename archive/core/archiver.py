@@ -35,7 +35,9 @@ class Archiver(Base):
 
         now = datetime.now()
         acted_at = dt_fromisoformat(meta["acted_at"])
-        title = get_validate_filename(f"{item['meta']['action']}-{target['title']}")
+        title = get_validate_filename(
+            f"{item['meta']['action']}-{item['target']['title']}-{item['id'][:8]}"
+        )
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
         screenshot_path = target_dir.joinpath(f"{title}.png")
         self.logger.info(f"Saving screenshot to {screenshot_path}.")

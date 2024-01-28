@@ -119,25 +119,22 @@ class Monitor(Base):
                 continue
             target = await self.extract_one(item_locator)
             self.logger.info(f"于{acted_at_text} {action_texts}\n\t{target['title']}")
-            items.append(
-                {
-                    "id": uuid_hex(),
-                    "meta": {
-                        "action": action_text,
-                        "target_type": target_type.value,
-                        "acted_at": acted_at,
-                        "raw": meta_texts,
-                    },
-                    "target": target,
-                }
-            )
+            item = {
+                "id": uuid_hex(),
+                "meta": {
+                    "action": action_text,
+                    "target_type": target_type.value,
+                    "acted_at": acted_at,
+                    "raw": meta_texts,
+                },
+                "target": target,
+            }
+            items.append(item)
             item_filename = get_validate_filename(
-                f"{action_text}-{target['title']}.png"
+                f"{item['meta']['action']}-{item['target']['title']}-{item['id'][:8]}.png"
             )
-            target_dir = self.get_date_dir(acted_at.date())
-            await item_locator.screenshot(
-                path=target_dir.joinpath(item_filename), type="png"
-            )
+            target_path = self.get_date_dir(acted_at.date()).joinpath(item_filename)
+            await item_locator.screenshot(path=target_path, type="png")
 
         return items, count, acted_at
 
