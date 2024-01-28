@@ -92,7 +92,6 @@ ENV/
 media/
 logs/*
 !logs/.gitkeep
-whochat/ComWeChatRobot/log
 
 # Editors & IDEs
 *.sublime-project

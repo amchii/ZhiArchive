@@ -5,8 +5,7 @@ services:
       - redis-data:/data
     ports:
       - "36379:6379"
-    env_file:
-      - .env
+
 
   api:
     image: zhi-archive:latest
@@ -20,9 +19,6 @@ services:
     environment:
       redis_host: redis
       redis_port: 6379
-    env_file:
-      - .env
-      - .apienv
 
 
   login_worker:
@@ -35,8 +31,6 @@ services:
     environment:
       redis_host: redis
       redis_port: 6379
-    env_file:
-      - .env
 
 
   monitor:
@@ -49,8 +43,6 @@ services:
     environment:
       redis_host: redis
       redis_port: 6379
-    env_file:
-      - .env
 
 
   archiver:
@@ -63,8 +55,6 @@ services:
     environment:
       redis_host: redis
       redis_port: 6379
-    env_file:
-      - .env
 
 volumes:
   redis-data:
