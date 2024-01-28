@@ -31,7 +31,11 @@ class Archiver(Base):
         page = await self.new_page(context)
         await page.route(url, self.referrer_route)
         await self.goto(page, url)
-        await page.wait_for_timeout(timeout=100)
+        imgs_locator = page.locator("figure img")
+        for i in range(await imgs_locator.count()):
+            img_locator = imgs_locator.nth(i)
+            await img_locator.scroll_into_view_if_needed()
+        await page.wait_for_timeout(timeout=500)
 
         now = datetime.now()
         acted_at = dt_fromisoformat(meta["acted_at"])
