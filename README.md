@@ -31,12 +31,12 @@
 ```
 其中：
 **动态**文件`activities/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Pasted image 20240117182702](https://github.com/amchii/attachments/assets/26922464/af79089c-ec57-4305-964d-1dbbc99716c7)
+![Dynamic screenshot](https://github.com/amchii/ZhiArchive/raw/main/docs/static/dynamic_screenshot.png)
 
 
 
 **目标**文件`archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Pasted image 20240117182908](https://github.com/amchii/attachments/assets/26922464/7a62a61c-8323-419b-976e-fcb396aaaa13)
+![Content screenshot](https://github.com/amchii/ZhiArchive/raw/main/docs/static/content_screenshot.png)
 
 
 `archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/info.json`内容为：
@@ -101,7 +101,7 @@ API端口为9090，以127.0.0.1为例，
 
 #### 登录知乎获取Cookie
 打开[http://127.0.0.1:9090/zhi/login](http://127.0.0.1:9090/zhi/login)获取知乎登录二维码：
-![image](https://github.com/amchii/attachments/assets/26922464/11e0b5a6-b17f-44ae-8cc1-b89631a1358e)
+![qrcode login](https://github.com/amchii/ZhiArchive/raw/main/docs/static/qrcode_login.png)
 
 扫码完成登录后将重定向到"http://127.0.0.1:9090/zhi/login/state/f19c99849de8dccc8e9b" 并显示获取的cookies，路径最后的'f19c99849de8dccc8e9b'将是你的state文件地址，文件存储路径为`<项目目录>/states/f19c99849de8dccc8e9b.state.json`，可通过接口`GET/PUT /zhi/core/state_path` 查看和设置正在运行的`Monitor`和`Archiver`的state文件。
 *（后续考虑登录完成即设置state）*
