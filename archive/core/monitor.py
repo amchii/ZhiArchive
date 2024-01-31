@@ -184,7 +184,7 @@ class Monitor(Base):
             self.logger.info("No items, will do nothing.")
             return
         filename = f"{dt_str()}.json"
-        filepath = self.results_dir.joinpath(filename)
+        filepath = self.tasks_dir.joinpath(filename)
         with open(filepath, "w") as fp:
             json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
             self.logger.info(f"Save {len(items)} items to {filepath}.")

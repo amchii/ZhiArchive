@@ -303,6 +303,12 @@ class Base:
         os.makedirs(r, exist_ok=True)
         return r
 
+    @property
+    def tasks_dir(self):
+        r = self._base_results_dir.joinpath(self.people, "tasks")
+        os.makedirs(r, exist_ok=True)
+        return r
+
     def get_date_dir(self, dt: date) -> pathlib.Path:
         date_dir = self.results_dir.joinpath(dt.strftime("%Y/%m/%d"))
         os.makedirs(date_dir, exist_ok=True)
