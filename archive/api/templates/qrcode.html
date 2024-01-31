@@ -12,6 +12,7 @@
 </head>
 <body>
 <div id="qrcode">
+    <p>成功登录后会自动应用当前state</p>
     <img id="qrimage" src="" alt="二维码">
     <p id="status"></p>
 </div>
@@ -56,15 +57,17 @@
             clearInterval(timer); // 停止轮询
             document.getElementById('status').textContent = '用户已完成扫码，正在跳转...';
             // 跳转的页面 URL
+            fetch("/zhi/login/state/" + qrcode + "/use", {method: "POST"});
             window.location.href = '/zhi/login/state/' + qrcode;
           } else {
             document.getElementById('status').textContent = '等待用户扫码...';
           }
         })
         .catch(error => {
+          document.getElementById('status').textContent = '轮询扫码状态接口失败';
           console.error('轮询扫码状态接口失败', error);
         });
-    }, 2000);
+    }, 1000);
   }
 
   // 页面加载完成后开始请求二维码接口

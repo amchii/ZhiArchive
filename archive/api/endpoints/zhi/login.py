@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from archive.api.render import templates
 from archive.config import settings
+from archive.core.base import APIClient
 from archive.core.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
 
 router = APIRouter()
@@ -63,6 +64,14 @@ async def login_qrcode(prefix: str, timeout: int = 10):
     raise HTTPException(status_code=404)
 
 
+@router.get("/qrcode/{prefix}/scan_status", response_model=QRCodeScanStatusResponse)
+async def qrcode_scan_status(prefix: str):
+    qrcode_task = get_qrcode_task(prefix)
+    client = ZhiLoginClient()
+    status = await client.get_qrcode_task_status(qrcode_task.task_name)
+    return {"status": status}
+
+
 @router.get("/state/{prefix}", response_class=FileResponse)
 async def login_state(prefix: str):
     qrcode_task = get_qrcode_task(prefix)
@@ -71,9 +80,9 @@ async def login_state(prefix: str):
     return FileResponse(qrcode_task.state_path)
 
 
-@router.get("/qrcode/{prefix}/scan_status", response_model=QRCodeScanStatusResponse)
-async def qrcode_scan_status(prefix: str):
+@router.post("/state/{prefix}/use")
+async def use_state(prefix: str) -> str:
     qrcode_task = get_qrcode_task(prefix)
-    client = ZhiLoginClient()
-    status = await client.get_qrcode_task_status(qrcode_task.task_name)
-    return {"status": status}
+    client = APIClient()
+    await client.set_state_path_to_redis(qrcode_task.state_path)
+    return str(await client.get_state_path())
