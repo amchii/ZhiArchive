@@ -6,7 +6,7 @@ from urllib import parse
 import aiofiles
 from playwright.async_api import BrowserContext, Route
 
-from archive.core.base import ActivityItem, Base
+from archive.core.base import ActivityItem, Base, TargetType
 from archive.utils.common import dt_fromisoformat, get_validate_filename
 from archive.utils.encoder import JSONEncoder
 
@@ -31,7 +31,10 @@ class Archiver(Base):
         page = await self.new_page(context)
         await page.route(url, self.referrer_route)
         await self.goto(page, url)
-        imgs_locator = page.locator("figure img")
+        if meta["target_type"] == TargetType.ANSWER:
+            imgs_locator = page.locator("div.AnswerCard figure img")
+        else:
+            imgs_locator = page.locator("div.Post-RichTextContainer figure img")
         for i in range(await imgs_locator.count()):
             img_locator = imgs_locator.nth(i)
             await img_locator.scroll_into_view_if_needed()
