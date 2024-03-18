@@ -23,6 +23,7 @@ services:
 
   login_worker:
     image: zhi-archive:latest
+    init: true
     depends_on: [ redis ]
     working_dir: /opt/zhi_archive
     command: python run_login_worker.py
@@ -35,6 +36,7 @@ services:
 
   monitor:
     image: zhi-archive:latest
+    init: true
     depends_on: [ redis ]
     working_dir: /opt/zhi_archive
     command: python run_monitor.py
@@ -47,6 +49,7 @@ services:
 
   archiver:
     image: zhi-archive:latest
+    init: true
     depends_on: [ redis ]
     working_dir: /opt/zhi_archive
     command: python run_archiver.py
