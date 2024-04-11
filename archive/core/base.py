@@ -413,8 +413,8 @@ class Base:
         **context_extra,
     ):
         self.logger.info(f"{self.name} started.")
-        async with async_playwright() as playwright:
-            while True:
+        while True:
+            async with async_playwright() as playwright:
                 async with self.rotate():
                     try:
                         self.logger.debug(f"{self.name}: New loop")
