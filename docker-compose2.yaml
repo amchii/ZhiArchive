@@ -16,3 +16,4 @@ services:
     command: python run_all_workers_in_one.py
     volumes:
       - ./:/opt/zhi_archive
+    mem_limit: ${ALL_WORKERS_MEM_LIMIT:-100g}
