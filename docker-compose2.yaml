@@ -1,0 +1,18 @@
+services:
+  api:
+    image: zhi-archive:latest
+    working_dir: /opt/zhi_archive
+    command: bash run_api.sh
+    volumes:
+      - ./:/opt/zhi_archive
+    ports:
+      - "9090:9090"
+
+
+  all_workers:
+    image: zhi-archive:latest
+    init: true
+    working_dir: /opt/zhi_archive
+    command: python run_all_workers_in_one.py
+    volumes:
+      - ./:/opt/zhi_archive
