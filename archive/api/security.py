@@ -8,6 +8,8 @@ from archive.utils.encrypt import decode_jwt
 
 
 def verify_user_from_cookie(token: Annotated[str | None, Cookie()] = None) -> str:
+    if not api_settings.enable_auth:
+        return "unsafe"
     if not token:
         raise HTTPException(status_code=401)
     try:
