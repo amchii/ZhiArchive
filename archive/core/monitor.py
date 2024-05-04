@@ -35,15 +35,14 @@ class Monitor(Base):
         self,
         people: str = None,
         init_state_path: str | pathlib.Path = None,
-        fetch_until: datetime = datetime.now() - timedelta(days=10),
-        person_page_url=None,
+        fetch_until: datetime = datetime.now()
+        - timedelta(days=settings.monitor_fetch_until),
         page_default_timeout=10 * 1000,
         interval=60 * 5,
     ):
         super().__init__(
             people,
             init_state_path,
-            person_page_url,
             page_default_timeout,
             interval=interval,
         )

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>配置与状态控制</title>
+    <style>
+        textarea {
+            width: 90%;
+            height: 150px;
+            margin-bottom: 10px;
+        }
+
+        input[type=text] {
+            width: 90%;
+            padding: 5px;
+        }
+        .config-section {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+<div class="config-section">
+    <h2>知乎Cookies路径</h2>
+    <input type="text" id="statePath">
+    <button onclick="submitStatePath()">修改</button>
+</div>
+<div class="config-section">
+    <h2>归档Archiver配置</h2>
+    <textarea id="archiverConfig"></textarea>
+    <button onclick="submitJSONUpdate('archiver')">提交</button>
+</div>
+
+<div class="config-section">
+    <h2>监控Monitor配置</h2>
+    <textarea id="monitorConfig"></textarea>
+    <button onclick="submitJSONUpdate('monitor')">提交</button>
+</div>
+
+<div class="config-section">
+    <h2>Archiver状态（暂停/运行）</h2>
+    <div id="archiverPause"></div>
+    <button onclick="togglePause('archiver')">切换状态</button>
+</div>
+
+<div class="config-section">
+    <h2>Monitor状态（暂停/运行）</h2>
+    <div id="monitorPause"></div>
+    <button onclick="togglePause('monitor')">切换状态</button>
+</div>
+
+<script>
+  function fetchStatePath() {
+    fetch('/zhi/core/state_path')
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById('statePath').value = data.path;
+      })
+      .catch(error => console.error('Failed to fetch state path:', error));
+  }
+
+  // Submit updated state path
+  function submitStatePath() {
+    const path = document.getElementById('statePath').value;
+
+    fetch('/zhi/core/state_path', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({path: path})
+    })
+      .then(response => {
+        if (response.ok) {
+          alert('State path updated successfully!');
+        } else {
+          alert('Failed to update state path.');
+        }
+      })
+      .catch(error => {
+        console.error('Failed to update state path:', error);
+      });
+  }
+
+  // Fetch and update configuration data
+  function fetchConfig(endpoint, elementId) {
+    fetch(endpoint)
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById(elementId).value = JSON.stringify(data, undefined, 2);
+      })
+      .catch(error => console.error('Failed to fetch config:', error));
+  }
+
+  function submitJSONUpdate(type) {
+    const configData = document.getElementById(type + 'Config').value;
+    try {
+      // This will throw an error if the JSON is invalid
+      const json = JSON.parse(configData);
+
+      // Perform the PUT request to update the configuration
+      fetch('/zhi/core/' + type + '/configs', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(json)
+      })
+        .then(response => {
+          if (response.ok) {
+            alert('The ' + type + ' configuration has been updated successfully!');
+          } else {
+            alert('Failed to update ' + type + ' configuration.');
+          }
+        })
+        .catch(error => {
+          console.error('Failed to update config:', error);
+        });
+    } catch (e) {
+      alert('Invalid JSON format: ' + e.message);
+    }
+  }
+
+  // Fetch pause state data
+  function fetchPauseState(type) {
+    fetch(`/zhi/core/${type}/pause`)
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById(`${type}Pause`).textContent = '运行状态: ' + (data.pause ? '暂停' : '运行');
+      })
+      .catch(error => console.error(`Failed to fetch ${type} pause state:`, error));
+  }
+
+  function togglePause(type) {
+    const pauseDiv = document.getElementById(`${type}Pause`);
+    const currentState = pauseDiv.textContent.includes('暂停');
+    const newState = !currentState;
+    fetch(`/zhi/core/${type}/pause`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({pause: newState})
+    })
+      .then(response => {
+        if (response.ok) {
+          pauseDiv.textContent = '运行状态: ' + (newState ? '暂停' : '运行');
+        } else {
+          alert(`Failed to toggle ${type} pause state.`);
+        }
+      })
+      .catch(error => {
+        console.error(`Failed to toggle ${type} pause state:`, error);
+      });
+  }
+
+  // Initialize the configurations and pause states on page load
+  document.addEventListener('DOMContentLoaded', function () {
+    fetchStatePath();
+    fetchConfig('/zhi/core/archiver/configs', 'archiverConfig');
+    fetchConfig('/zhi/core/monitor/configs', 'monitorConfig');
+    fetchPauseState('archiver');
+    fetchPauseState('monitor');
+  });
+</script>
+</body>
+</html>

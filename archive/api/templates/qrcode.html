@@ -58,7 +58,7 @@
             document.getElementById('status').textContent = '用户已完成扫码，正在跳转...';
             // 跳转的页面 URL
             fetch("/zhi/login/state/" + qrcode + "/use", {method: "POST"});
-            window.location.href = '/zhi/login/state/' + qrcode;
+            window.location.href = '/zhi/core/config';
           } else {
             document.getElementById('status').textContent = '等待用户扫码...';
           }

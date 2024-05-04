@@ -99,8 +99,9 @@ async def get_context(
     state_path: str | pathlib.Path,
     state_auto_save: bool = True,
     browser_headless=True,
-    init: Callable[[BrowserContext], Coroutine[Any, Any, BrowserContext]]
-    | None = init_context,
+    init: (
+        Callable[[BrowserContext], Coroutine[Any, Any, BrowserContext]] | None
+    ) = init_context,
     locale="zh-CN",
     **extra,
 ) -> BrowserContext:
@@ -190,7 +191,6 @@ class Base:
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
     configurable: list[Cfg] = [
         Cfg("people"),
-        Cfg("person_page_url"),
         Cfg("page_default_timeout"),
         Cfg("interval"),
     ]
@@ -199,16 +199,12 @@ class Base:
         self,
         people: str = None,
         init_state_path: str | pathlib.Path = None,
-        person_page_url=None,
         page_default_timeout: int = 20 * 1000,
         base_results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
         interval: int = 10,
     ):
         self.people = people or settings.people
-        self.person_page_url = person_page_url or default.person_page_url.format(
-            people=self.people
-        )
         self.init_state_path = init_state_path or settings.states_dir.joinpath(
             default.state_file
         )
@@ -228,11 +224,15 @@ class Base:
         return f"{self.redis_key_prefix}:{self.people}"
 
     @property
+    def person_page_url(self):
+        return default.person_page_url.format(people=self.people)
+
+    @property
     def status_key(self):
         return f"{self.redis_key_prefix}:{self.name}:status"
 
     async def get_status(self) -> WorkStatus:
-        return WorkStatus(await self.redis.get(self.status_key, WorkStatus.WAITING))
+        return WorkStatus(await self.redis.get(self.status_key) or WorkStatus.WAITING)
 
     async def set_status(self, status: WorkStatus):
         return await self.redis.set(self.status_key, status.value)
@@ -354,7 +354,8 @@ class Base:
         response = await page.goto(url, **kwargs)
         if await self.is_abnormal(response):
             await page.screenshot(
-                path=settings.results_dir.joinpath(f"异常{dt_str()}.png"), full_page=True
+                path=settings.results_dir.joinpath(f"异常{dt_str()}.png"),
+                full_page=True,
             )
             raise AbnormalError(f"{url}: \n{await response.text()}")
         return response
@@ -413,6 +414,7 @@ class Base:
         **context_extra,
     ):
         self.logger.info(f"{self.name} started.")
+        await self.load_configs_from_redis()
         while True:
             async with async_playwright() as playwright:
                 async with self.rotate():

@@ -5,13 +5,17 @@ from archive.config import default, settings
 from archive.core.monitor import Monitor
 
 
-async def main():
-    monitor = Monitor(
+def get_monitor():
+    return Monitor(
         settings.people,
         settings.states_dir.joinpath(default.state_file),
         fetch_until=datetime.now() - timedelta(days=settings.monitor_fetch_until),
         interval=settings.monitor_interval,
     )
+
+
+async def main():
+    monitor = get_monitor()
     await monitor.run(headless=settings.monitor_headless)
 
 

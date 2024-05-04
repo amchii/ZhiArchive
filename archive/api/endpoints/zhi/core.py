@@ -4,11 +4,13 @@ from enum import Enum
 from typing import Any
 
 import aiofiles
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from archive.core.base import APIClient
 
+from ...render import templates
 from . import PauseStatus
 from .login import get_qrcode_task
 
@@ -79,3 +81,8 @@ async def set_configs(name: WorkerName, configs: dict[str, Any]):
     client = APIClient(name)
     await client.set_configs_to_redis(configs)
     return configs
+
+
+@router.get("/config", response_class=HTMLResponse)
+async def config_view(request: Request):
+    return templates.TemplateResponse("config.html", context={"request": request})
