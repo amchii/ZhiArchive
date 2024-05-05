@@ -6,12 +6,12 @@ from urllib import parse
 import aiofiles
 from playwright.async_api import BrowserContext, Route
 
-from archive.core.base import ActivityItem, Base, TargetType
+from archive.core.base import ActivityItem, BaseWorker, TargetType
 from archive.utils.common import dt_fromisoformat, get_validate_filename
 from archive.utils.encoder import JSONEncoder
 
 
-class Archiver(Base):
+class Archiver(BaseWorker):
     name = "archiver"
     output_name = "archives"
 
@@ -86,7 +86,7 @@ class Archiver(Base):
 
     async def _run(self, playwright, headless=True, **context_extra):
         if task := await self.pop_task():
-            self.logger.info(f"new archive task: {task}")
+            self.logger.info(f"New archive task: {task}")
             async with aiofiles.open(task.activity_path, encoding="utf-8") as fp:
                 item_list = json.loads(await fp.read())
             await self.store(playwright, item_list, headless, **context_extra)

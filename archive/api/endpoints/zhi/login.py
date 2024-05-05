@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from archive.api.render import templates
 from archive.config import settings
-from archive.core.base import APIClient
+from archive.core.api_client import get_api_client
 from archive.core.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
 
 router = APIRouter()
@@ -83,6 +83,6 @@ async def login_state(prefix: str):
 @router.post("/state/{prefix}/use")
 async def use_state(prefix: str) -> str:
     qrcode_task = get_qrcode_task(prefix)
-    client = APIClient()
+    client = get_api_client()
     await client.set_state_path_to_redis(qrcode_task.state_path)
     return str(await client.get_state_path())

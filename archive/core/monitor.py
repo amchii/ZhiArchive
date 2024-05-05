@@ -9,7 +9,7 @@ from archive.config import default, settings
 from archive.core.base import (
     ActivityItem,
     ArchiveTask,
-    Base,
+    BaseWorker,
     Cfg,
     Target,
     get_correct_target_type,
@@ -24,11 +24,12 @@ from archive.utils.common import (
 from archive.utils.encoder import JSONEncoder
 
 
-class Monitor(Base):
+class Monitor(BaseWorker):
     name = "monitor"
     output_name = "activities"
-    configurable = Base.configurable + [
-        Cfg("fetch_until", dt_toisoformat, dt_fromisoformat, read_only=True)
+    configurable = BaseWorker.configurable + [
+        Cfg("fetch_until", dt_toisoformat, dt_fromisoformat),
+        Cfg("latest_dt", dt_toisoformat, dt_fromisoformat, read_only=True),
     ]
 
     def __init__(
@@ -37,7 +38,7 @@ class Monitor(Base):
         init_state_path: str | pathlib.Path = None,
         fetch_until: datetime = datetime.now()
         - timedelta(days=settings.monitor_fetch_until),
-        page_default_timeout=10 * 1000,
+        page_default_timeout=30 * 1000,
         interval=60 * 5,
     ):
         super().__init__(

@@ -8,7 +8,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from archive.core.base import APIClient
+from archive.core.api_client import get_api_client
+from archive.core.base import ConfigFilter
 
 from ...render import templates
 from . import PauseStatus
@@ -31,13 +32,13 @@ class StatePath(BaseModel):
 
 @router.get("/state_path", response_model=StatePath)
 async def get_state_path():
-    client = APIClient()
+    client = get_api_client()
     return {"path": str(await client.get_state_path())}
 
 
 @router.put("/state_path", response_model=StatePath)
 async def set_state_path(state_path: StatePath):
-    client = APIClient()
+    client = get_api_client()
     await client.set_state_path_to_redis(state_path.path)
     return {"path": str(await client.get_state_path())}
 
@@ -56,7 +57,7 @@ async def new_state(state: str):
 
 @router.put("/{name}/pause", response_model=PauseStatus)
 async def pause(name: WorkerName, status: PauseStatus):
-    client = APIClient(name)
+    client = get_api_client(name)
     if status.pause:
         await client.pause()
     else:
@@ -66,21 +67,23 @@ async def pause(name: WorkerName, status: PauseStatus):
 
 @router.get("/{name}/pause", response_model=PauseStatus)
 async def pause_status(name: WorkerName):
-    client = APIClient(name)
+    client = get_api_client(name)
     return {"pause": await client.need_pause()}
 
 
 @router.get("/{name}/configs")
-async def get_configs(name: WorkerName) -> dict[str, Any]:
-    client = APIClient(name)
-    return await client.get_configs_from_redis()
+async def get_configs(
+    name: WorkerName, filter: ConfigFilter = ConfigFilter.ALL
+) -> dict[str, Any]:
+    client = get_api_client(name)
+    return await client.configurator.get_configs(filter)
 
 
 @router.put("/{name}/configs")
 async def set_configs(name: WorkerName, configs: dict[str, Any]):
-    client = APIClient(name)
-    await client.set_configs_to_redis(configs)
-    return configs
+    client = get_api_client(name)
+    await client.configurator.write_writeable_configs(configs)
+    return await client.configurator.get_configs(ConfigFilter.WRITABLE)
 
 
 @router.get("/config", response_class=HTMLResponse)

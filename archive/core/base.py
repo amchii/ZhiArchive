@@ -6,6 +6,7 @@ import os
 import pathlib
 from datetime import date, datetime
 from enum import Enum
+from functools import lru_cache
 from typing import Any, Callable, Coroutine, TypeAlias, TypedDict
 from urllib import parse
 
@@ -23,6 +24,7 @@ from redis import asyncio as aioredis
 from archive.config import default, settings
 from archive.env import user_agent
 from archive.utils.common import dt_str
+from archive.utils.encoder import JSONEncoder
 from archive.utils.stealth import stealth_async
 
 
@@ -156,11 +158,23 @@ class Config:
         serializer: SerializerT = None,
         deserializer: SerializerT = None,
         read_only=False,
+        depend_on: str = None,
+        getter: Callable[["BaseWorker", "Config"], Any] = None,
     ):
         self.name = name
         self.serializer = serializer
         self.deserializer = deserializer
         self.read_only = read_only
+        self.depend_on = depend_on
+        self._getter = getter or self.default_getter
+        self._updates = []
+
+    @staticmethod
+    def default_getter(worker: "BaseWorker", cfg: "Config"):
+        return getattr(worker, cfg.name, None)
+
+    def getattr(self, worker: "BaseWorker"):
+        return self._getter(worker, self)
 
     def to_python(self, value):
         if self.deserializer:
@@ -168,12 +182,21 @@ class Config:
         return value
 
     def to_jsonable(self, value):
-        if self.deserializer:
+        if self.serializer:
             return self.serializer(value)
         return value
 
+    def __repr__(self):
+        return f"{self.__class__.__name__}<{self.name}>"
+
 
 Cfg = Config
+
+
+class ConfigFilter(str, Enum):
+    ALL = "all"
+    READ_ONLY = "read_only"
+    WRITABLE = "writable"
 
 
 class WorkStatus(str, Enum):
@@ -181,7 +204,50 @@ class WorkStatus(str, Enum):
     WAITING = "waiting"  # 正在等待下次运行
 
 
-class Base:
+class RedisConfigurator:
+    """
+    Redis配置
+    """
+
+    def __init__(self, worker: "BaseWorker"):
+        self.worker = worker
+        self.redis = worker.redis
+        self.configs_key = worker.configs_key
+        self.logger = self.worker.logger
+
+    async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
+        configs = {}
+        if configs_str := await self.redis.get(self.configs_key):
+            all_ = json.loads(configs_str)
+            for c in self.worker.get_configurable(filter_):
+                if c.name in all_:
+                    configs[c.name] = all_[c.name]
+        return configs
+
+    async def _write_configs(self, configs: dict[str, Any]):
+        return await self.redis.set(
+            self.configs_key, json.dumps(configs, cls=JSONEncoder)
+        )
+
+    async def write_writeable_configs(self, configs: dict[str, Any]):
+        loaded = self.worker.load_configs(configs)
+        all_ = await self.get_configs()
+        all_.update(loaded)
+        return await self._write_configs(all_)
+
+    async def sync_from_worker(self):
+        await self._write_configs(self.worker.get_configs(ConfigFilter.ALL))
+
+    async def load_to_worker(self):
+        configs = await self.get_configs()
+        if not configs:
+            self.logger.info("No configs found in redis.")
+        else:
+            self.worker.load_configs(await self.get_configs())
+        await self.sync_from_worker()
+
+
+class BaseWorker:
     name = ""
     output_name = ""
     redis_key_prefix = "zhi_archive:archive"
@@ -193,13 +259,16 @@ class Base:
         Cfg("people"),
         Cfg("page_default_timeout"),
         Cfg("interval"),
+        Cfg("person_page_url", read_only=True, depend_on="people"),
+        Cfg("results_dir", str, read_only=True, depend_on="people"),
+        Cfg("tasks_dir", str, read_only=True, depend_on="people"),
     ]
 
     def __init__(
         self,
         people: str = None,
         init_state_path: str | pathlib.Path = None,
-        page_default_timeout: int = 20 * 1000,
+        page_default_timeout: int = 30 * 1000,
         base_results_dir: str | pathlib.Path = None,
         redis_url: str = settings.redis_url,
         interval: int = 10,
@@ -218,6 +287,14 @@ class Base:
         )
         self.interval = interval
         self.logger = logging.getLogger(self.name or "default")
+        self.init_configurable()
+        self.configurator = RedisConfigurator(self)
+
+    def init_configurable(self):
+        name_to_cfg = {cfg.name: cfg for cfg in self.configurable}
+        for cfg in self.get_configurable(filter_=ConfigFilter.READ_ONLY):
+            if cfg.depend_on and cfg.depend_on in name_to_cfg:
+                name_to_cfg[cfg.depend_on]._updates.append(cfg)
 
     @property
     def personal_key(self):
@@ -251,43 +328,32 @@ class Base:
     def configs_key(self):
         return f"{self.redis_key_prefix}:{self.name}:configs"
 
-    def get_configs(self):
+    @lru_cache(None)
+    def get_configurable(self, filter_: ConfigFilter = ConfigFilter.ALL):
+        if filter_ == ConfigFilter.ALL:
+            return self.configurable
+        elif filter_ == ConfigFilter.READ_ONLY:
+            return [c for c in self.configurable if c.read_only]
+        elif filter_ == ConfigFilter.WRITABLE:
+            return [c for c in self.configurable if not c.read_only]
+
+    def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
         configs = {}
-        for c in self.configurable:
-            v = getattr(self, c.name, None)
+        for c in self.get_configurable(filter_):
+            v = c.getattr(self)
             configs[c.name] = c.to_jsonable(v)
         return configs
 
     def load_configs(self, configs: dict[str, Any]):
         loaded = {}
-        for c in self.configurable:
-            if not c.read_only and c.name in configs:
+        for c in self.get_configurable(ConfigFilter.WRITABLE):
+            if c.name in configs:
                 setattr(self, c.name, c.to_python(configs[c.name]))
                 loaded[c.name] = configs[c.name]
+                if c._updates:
+                    for cfg in c._updates:
+                        loaded[cfg.name] = cfg.to_jsonable(cfg.getattr(self))
         return loaded
-
-    async def get_configs_from_redis(self):
-        configs_str = await self.redis.get(self.configs_key)
-        if configs_str:
-            return json.loads(configs_str)
-        return {}
-
-    async def set_configs_to_redis(self, configs: dict[str, Any]):
-        return await self.redis.set(self.configs_key, json.dumps(configs))
-
-    async def load_configs_from_redis(self):
-        configs = await self.get_configs_from_redis()
-        if not configs:
-            self.logger.info("Write configs to redis.")
-            current_configs = self.get_configs()
-            await self.set_configs_to_redis(self.get_configs())
-        else:
-            self.logger.debug("Read configs from redis.")
-            self.logger.debug(configs)
-            self.load_configs(configs)
-            current_configs = self.get_configs()
-            await self.set_configs_to_redis(current_configs)
-        self.logger.debug(f"Current configs: {current_configs}")
 
     async def push_task(self, task: ArchiveTask):
         return await self.redis.rpush(self.tasks_key, task.as_value())
@@ -389,10 +455,12 @@ class Base:
 
     async def before_run(self):
         self.logger.debug("Before run")
-        await self.load_configs_from_redis()
+        await self.configurator.load_to_worker()
 
     async def after_run(self):
-        pass
+        self.logger.debug("After run")
+        self.logger.debug("Write all configs to redis")
+        await self.configurator.sync_from_worker()
 
     @contextlib.asynccontextmanager
     async def rotate(self):
@@ -414,7 +482,7 @@ class Base:
         **context_extra,
     ):
         self.logger.info(f"{self.name} started.")
-        await self.load_configs_from_redis()
+        await self.configurator.load_to_worker()
         while True:
             async with async_playwright() as playwright:
                 async with self.rotate():
@@ -426,9 +494,3 @@ class Base:
                         await self.handle_abnormal()
                     except Exception as e:
                         self.logger.exception(e)
-
-
-class APIClient(Base):
-    def __init__(self, as_: str = None, people=None, init_state_path=None):
-        self.name = as_ or self.name
-        super().__init__(people, init_state_path)
