@@ -97,7 +97,7 @@ docker build -t zhi-archive:latest -f BaseDockerfile .
 
 但是当部署在云服务器上并暴露API端口时，**强烈建议**配置`.apienv`启用接口认证。
 
-所有可配置项见[config.py](https://github.com/amchii/ZhiArchive/blob/dev/archive/config.py)：
+所有可配置项见[config.py](./archive/config.py)：
 
 支持通过环境变量或`.env`，`.apienv`文件配置
 
@@ -147,7 +147,7 @@ docker compose -f docker-compose2.yaml up -d
 
 
 API端口为9090，以127.0.0.1为例，
-打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档，下面👇🏻所提到的接口可在这个接口文档进行调用，
+打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档，可在这个接口文档进行接口调用。
 
 若你启用了接口认证，调用之前请先打开[http://127.0.0.1:9090/auth/login](http://127.0.0.1:9090/auth/login)登录获取本项目的接口认证信息（Cookies）
 
@@ -162,7 +162,7 @@ API端口为9090，以127.0.0.1为例，
 
 ![配置页](https://github.com/amchii/ZhiArchive/assets/26922464/68e32e88-8383-4583-8e19-45332d3c0111)
 
-Monitor默认每5分钟监测一次，配置项含义见[config.py 。](https://github.com/amchii/ZhiArchive/blob/dev/archive/config.py)
+Monitor默认每5分钟监测一次，配置项含义见[config.py](./archive/config.py)。
 
 #### 运行Monitor和Archiver
 
