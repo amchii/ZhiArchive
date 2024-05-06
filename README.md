@@ -2,7 +2,6 @@
 
 **监测知乎用户的个人动态并保存内容以防丢失。**
 
-
 某用户的动态结果保存目录如下：
 `activities`为个人动态页快照，`archives`为动态对应的回答/文章快照
 
@@ -64,13 +63,18 @@
 ## 使用
 
 *注意查看日志跟踪运行状态*
+
 *archiver: archiver.log*
+
 *monitor: monitor.log*
+
 *login_worker: login_worker.log*
+
+
 
 ### Docker
 
-#### 下载本项目：
+#### 下载本项目
 
 ```sh
 # 下载本项目
@@ -79,57 +83,90 @@ git clone https://github.com/amchii/ZhiArchive.git
 cd ZhiArhive
 ```
 
-#### 构建镜像:
+#### 构建镜像
 
 ```sh
 docker build -t zhi-archive:latest -f BaseDockerfile .
 ```
 
-#### 配置环境变量：
+这会从微软镜像仓库拉取playwright的镜像，注意你的网络环境。
 
-  所有可配置项见[config.py](https://github.com/amchii/ZhiArchive/blob/dev/archive/config.py)，支持通过环境变量或`.env`，`.apienv`文件配置
+#### 配置环境变量
+
+现在支持**0配置**启动，你若是只想在本机**试用本项目，可以忽略这一步**。
+
+但是当部署在云服务器上并暴露API端口时，**强烈建议**配置`.apienv`启用接口认证。
+
+所有可配置项见[config.py](https://github.com/amchii/ZhiArchive/blob/dev/archive/config.py)：
+
+支持通过环境变量或`.env`，`.apienv`文件配置
 
 `.env`文件
 
 ```
 secret_key=  # 请生成一个随机字符串
-people=<someone>  # 知乎用户，在个人主页地址中：https://www.zhihu.com/people/<someone>
-monitor_fetch_until=10  # 天数，Monitor初次运行时默认抓取到10天前的动态
 ```
 
 `.apienv`文件
 
 ```
 # API认证账号，配置用户名和密码
+enable_auth=true
 username=
 password=
 ```
 
+####
+
 #### 启动
+
+##### 1. 常规方式
 
 ```
 docker compose up -d
 ```
 
-API端口为9090，以127.0.0.1为例，
-打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档，下面👇🏻所提到的接口可在这个接口文档进行调用，调用之前请先打开[http://127.0.0.1:9090/auth/login](http://127.0.0.1:9090/auth/login)登录获取本项目的接口认证信息（Cookies）
+这会为每个worker启用一个容器，同时运行一个redis实例。
 
-#### 登录知乎获取Cookie
+##### 2. 单独部署redis
+
+若你想单独部署redis，可以使用`docker-compose2.yaml`，需要通过环境变量或`.env`文件配置redis，如：
+
+```
+redis_host=172.17.0.1
+redis_port=6379
+redis_passwd=apassword
+```
+
+启动服务：
+
+``````
+docker compose -f docker-compose2.yaml up -d
+``````
+
+
+
+API端口为9090，以127.0.0.1为例，
+打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档，下面👇🏻所提到的接口可在这个接口文档进行调用，
+
+若你启用了接口认证，调用之前请先打开[http://127.0.0.1:9090/auth/login](http://127.0.0.1:9090/auth/login)登录获取本项目的接口认证信息（Cookies）
+
+#### 初始化
+
+1. 登录知乎获取Cookie
 
 打开[http://127.0.0.1:9090/zhi/login](http://127.0.0.1:9090/zhi/login)获取知乎登录二维码：
 ![qrcode login](https://github.com/amchii/ZhiArchive/raw/main/docs/static/qrcode_login.png)
 
-扫码完成登录后将将**自动应用**获取的Cookie并
+扫码完成登录后将**自动应用**获取的Cookie并重定向到配置页面http://127.0.0.1:9090/zhi/core/config：
 
-*重定向到"http://127.0.0.1:9090/zhi/login/state/f19c99849de8dccc8e9b" 并显示获取的cookies，路径最后的'f19c99849de8dccc8e9b'将是你的state文件地址，文件存储路径为`<项目目录>/states/f19c99849de8dccc8e9b.state.json`，可通过接口`GET/PUT /zhi/core/state_path` 查看和设置正在运行的`Monitor`和`Archiver`的state文件。*
+![配置页](https://github.com/amchii/ZhiArchive/assets/26922464/68e32e88-8383-4583-8e19-45332d3c0111)
 
-
+Monitor默认每5分钟监测一次，配置项含义见[config.py 。](https://github.com/amchii/ZhiArchive/blob/dev/archive/config.py)
 
 #### 运行Monitor和Archiver
 
-Monitor和Archiver默认是暂停状态，设置好知乎的Cookie后，可以通过接口：
-`/zhi/core/{name}/pause`查看和更改运行状态，`name`可以是'monitor'或'archiver'
-运行后查看日志输出和结果目录。
+Monitor和Archiver默认是暂停状态，通过配置页的`归档Archiver配置`和`监控Monitor配置` 更改`people`为你想要监控的知乎用户名，通过下方的`切换状态`按钮可以控制运行状态，注意观察日志文件的输出。
 
 
 ## TODO
