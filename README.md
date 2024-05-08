@@ -32,12 +32,12 @@
 
 其中：
 **动态**文件`activities/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Dynamic screenshot](https://github.com/amchii/ZhiArchive/raw/main/docs/static/dynamic_screenshot.png)
+![Dynamic screenshot](./docs/static/dynamic_screenshot.png)
 
 
 
 **目标**文件`archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Content screenshot](https://github.com/amchii/ZhiArchive/raw/main/docs/static/content_screenshot.png)
+![Content screenshot](./docs/static/content_screenshot.png)
 
 
 `archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/info.json`内容为：
@@ -120,7 +120,7 @@ password=
 
 #### 启动
 
-##### 1. 常规方式
+##### 常规方式
 
 ```
 docker compose up -d
@@ -128,7 +128,7 @@ docker compose up -d
 
 这会为每个worker启用一个容器，同时运行一个redis实例。
 
-##### 2. 单独部署redis
+##### 单独部署redis
 
 若你想单独部署redis，可以使用`docker-compose2.yaml`，需要通过环境变量或`.env`文件配置redis，如：
 
@@ -147,26 +147,35 @@ docker compose -f docker-compose2.yaml up -d
 
 
 API端口为9090，以127.0.0.1为例，
-打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档，可在这个接口文档进行接口调用。
+打开[http://127.0.0.1:9090/docs](http://127.0.0.1:9090/docs)可查看接口文档。
 
-若你启用了接口认证，调用之前请先打开[http://127.0.0.1:9090/auth/login](http://127.0.0.1:9090/auth/login)登录获取本项目的接口认证信息（Cookies）
+若你启用了接口认证，调用接口之前请先打开[http://127.0.0.1:9090/auth/login](http://127.0.0.1:9090/auth/login)登录获取本项目的接口认证信息（Cookies）
 
 #### 初始化
 
-1. 登录知乎获取Cookie
+1. ##### 登录知乎获取Cookie
 
-打开[http://127.0.0.1:9090/zhi/login](http://127.0.0.1:9090/zhi/login)获取知乎登录二维码：
-![qrcode login](https://github.com/amchii/ZhiArchive/raw/main/docs/static/qrcode_login.png)
+   打开[http://127.0.0.1:9090/zhi/login](http://127.0.0.1:9090/zhi/login)获取知乎登录二维码：
+   ![qrcode login](./docs/static/qrcode_login.png)
 
-扫码完成登录后将**自动应用**获取的Cookie并重定向到配置页面http://127.0.0.1:9090/zhi/core/config：
+   扫码完成登录后将**自动应用**获取的Cookie并重定向到配置页面http://127.0.0.1:9090/zhi/core/config：
 
-![配置页](https://github.com/amchii/ZhiArchive/assets/26922464/68e32e88-8383-4583-8e19-45332d3c0111)
+2. ##### 配置页
 
-Monitor默认每5分钟监测一次，配置项含义见[config.py](./archive/config.py)。
+   `states/46edded3d9319648da5a.state.json`即保存的cookies文件，上一步登录成功后自动设置，所以如果你有该文件，也可以不登录直接设置为你的文件路径。
+
+   ![配置页](./docs/static/config.png)
+
+   Monitor默认每5分钟监测一次，配置项含义见[config.py](./archive/config.py)。
 
 #### 运行Monitor和Archiver
 
 Monitor和Archiver默认是暂停状态，通过配置页的`归档Archiver配置`和`监控Monitor配置` 更改`people`为你想要监控的知乎用户名，通过下方的`切换状态`按钮可以控制运行状态，注意观察日志文件的输出。
+
+## 已知问题
+
+1. 即使是无头模式，Chromium浏览网页和截图时占用内存依然较高，在低内存的云服务器上可能会崩溃（需要数百MB，最好通过docker的`--memory`限制下，参考`docker-compose2.yaml`）
+2. 超长的回答/文章可能会截图失败（playwright抛出错误），经测试内存越大能截的图越长
 
 
 ## TODO
@@ -176,6 +185,7 @@ Monitor和Archiver默认是暂停状态，通过配置页的`归档Archiver配�
 - 支持监测多个用户
 - 异常告警
 - 提供前端界面
+- 存档任务失败处理
 
 
 ## 欢迎交流，Star⭐️一下，随时更新
