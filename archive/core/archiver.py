@@ -6,14 +6,27 @@ from urllib import parse
 import aiofiles
 from playwright.async_api import BrowserContext, Route
 
-from archive.core.base import ActivityItem, BaseWorker, TargetType
+from archive.config import settings
+from archive.core.base import ActivityItem, BaseWorker, Cfg, TargetType
 from archive.utils.common import dt_fromisoformat, get_validate_filename
 from archive.utils.encoder import JSONEncoder
+from archive.utils.js import get_page_scrollHeight, get_page_scrollWidth
 
 
 class Archiver(BaseWorker):
     name = "archiver"
     output_name = "archives"
+    configurable = BaseWorker.configurable + [
+        Cfg(
+            "screenshot_max_page_scroll_height",
+        )
+    ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.screenshot_max_page_scroll_height = (
+            settings.screenshot_max_page_scroll_height
+        )
 
     async def referrer_route(self, route: Route):
         headers = route.request.headers
@@ -47,8 +60,24 @@ class Archiver(BaseWorker):
         )
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
         screenshot_path = target_dir.joinpath(f"{title}.png")
+        page_scroll_height = await page.evaluate(get_page_scrollHeight)
+        if 0 < self.screenshot_max_page_scroll_height < page_scroll_height:
+            page_scroll_width = await page.evaluate(get_page_scrollWidth)
+            clip = {
+                "x": 0,
+                "y": 0,
+                "width": page_scroll_width,
+                "height": self.screenshot_max_page_scroll_height,
+            }
+            self.logger.warning(
+                f"Page's scrollHeight({page_scroll_height}) is greater than `screenshot_max_page_scroll_height`({self.screenshot_max_page_scroll_height})"
+            )
+        else:
+            clip = None
         self.logger.info(f"Saving screenshot to {screenshot_path}.")
-        await page.screenshot(path=screenshot_path, type="png", full_page=True)
+        await page.screenshot(
+            path=screenshot_path, type="png", full_page=True, clip=clip
+        )
         info = {
             "title": target["title"],
             "url": url,

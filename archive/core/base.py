@@ -216,12 +216,12 @@ class RedisConfigurator:
         self.logger = self.worker.logger
 
     async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
-        configs = {}
+        configs = self.worker.get_configs(filter_)
         if configs_str := await self.redis.get(self.configs_key):
             all_ = json.loads(configs_str)
-            for c in self.worker.get_configurable(filter_):
-                if c.name in all_:
-                    configs[c.name] = all_[c.name]
+            for key in configs:
+                if key in all_:
+                    configs[key] = all_[key]
         return configs
 
     async def _write_configs(self, configs: dict[str, Any]):

@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     browser: Browser = Browser.CHROMIUM
     monitor_fetch_until: int = 1  # days，Monitor运行时默认抓取到1天前的动态
     monitor_interval: int = 60 * 5  # seconds，Monitor默认每5分钟检查一次新的动态
+    screenshot_max_page_scroll_height: int = 0  # 截图允许的页面的最大高度，像素值。0表示不限制
 
     class Config:
         env_file = ".env"

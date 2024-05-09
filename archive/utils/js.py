@@ -19,3 +19,5 @@ async () => {
     }, 100);
   });
 }"""
+get_page_scrollHeight = "() => document.documentElement.scrollHeight"
+get_page_scrollWidth = "() => document.documentElement.scrollWidth"
