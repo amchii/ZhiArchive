@@ -60,7 +60,7 @@
             fetch("/zhi/login/state/" + qrcode + "/use", {method: "POST"});
             window.location.href = '/zhi/core/config';
           } else {
-            document.getElementById('status').textContent = '等待用户扫码...';
+            document.getElementById('status').textContent = '等待用户扫码...扫码完成后请等待，将自动跳转至配置页';
           }
         })
         .catch(error => {

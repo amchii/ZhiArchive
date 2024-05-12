@@ -89,7 +89,7 @@ cd ZhiArhive
 docker build -t zhi-archive:latest -f BaseDockerfile .
 ```
 
-这会从微软镜像仓库拉取playwright的镜像，注意你的网络环境。
+这会拉取zhi-archive(playwright)的镜像，注意你的网络环境。
 
 #### 配置环境变量
 
@@ -116,14 +116,14 @@ username=
 password=
 ```
 
-####
-
 #### 启动
+
+*docker 新版本可以直接使用`docker compose`替换`docker-compose`*
 
 ##### 常规方式
 
 ```
-docker compose up -d
+docker-compose up -d
 ```
 
 这会为每个worker启用一个容器，同时运行一个redis实例。
@@ -141,7 +141,7 @@ redis_passwd=apassword
 启动服务：
 
 ``````
-docker compose -f docker-compose2.yaml up -d
+docker-compose -f docker-compose2.yaml up -d
 ``````
 
 
