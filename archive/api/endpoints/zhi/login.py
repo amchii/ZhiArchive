@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 
@@ -18,6 +19,10 @@ def get_qrcode_task(prefix: str) -> QRCodeTask:
         settings.states_dir.joinpath(f"{prefix}.qrcode.png"),
         settings.states_dir.joinpath(f"{prefix}.state.json"),
     )
+
+
+def get_task_prefix(task: QRCodeTask) -> str:
+    return task.qrcode_path.name.split(".")[0]
 
 
 class QRCodeTaskResponse(BaseModel):
@@ -49,8 +54,8 @@ async def new_login_qrcode():
     prefix = os.urandom(10).hex()
     qrcode_task = get_qrcode_task(prefix)
     client = ZhiLoginClient()
-    await client.new_task(qrcode_task)
-    return {"qrcode": prefix}
+    task = await client.new_task(qrcode_task)
+    return {"qrcode": get_task_prefix(task)}
 
 
 @router.get("/qrcode/{prefix}", response_class=FileResponse)
@@ -61,6 +66,7 @@ async def login_qrcode(prefix: str, timeout: int = 10):
     while start + timeout > time.perf_counter():
         if qrcode_path.exists():
             return FileResponse(qrcode_path)
+        await asyncio.sleep(0.1)
     raise HTTPException(status_code=404)
 
 

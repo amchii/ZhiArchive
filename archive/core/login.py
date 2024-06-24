@@ -33,6 +33,7 @@ class QRCodeTaskStatus(str, Enum):
     FAILED = "failed"
     OK = "ok"
     NO_EXIST = "not_exist"
+    WAITING_FOR_SCAN = "waiting_for_scan"
 
 
 class QRCodeTask:
@@ -72,10 +73,24 @@ class Base:
             decode_responses=True,
         )
 
-    async def new_task(self, task: QRCodeTask):
+    async def new_task(self, task: QRCodeTask) -> QRCodeTask:
+        """
+        新任务
+
+        确保当前没有正在进行的任务，否则返回当前任务
+        """
+        exist = await self.get_qrcode_task()
+        if exist:
+            task_status = await self.get_qrcode_task_status(exist.task_name)
+            if task_status in [
+                QRCodeTaskStatus.PENDING,
+                QRCodeTaskStatus.WAITING_FOR_SCAN,
+            ]:
+                return exist
         await self.redis.set(
             self.qrcode_task_key, task.as_value(), ex=self.task_timeout
         )
+        return task
 
     async def get_qrcode_task(self) -> QRCodeTask | None:
         task = await self.redis.get(self.qrcode_task_key)
@@ -146,6 +161,9 @@ class ZhiLogin(Base):
 
     async def _wait_for_login_success(self, page: Page, task_key: str):
         try:
+            await self.set_qrcode_task_status(
+                task_key, QRCodeTaskStatus.WAITING_FOR_SCAN
+            )
             await page.wait_for_url(at_home, timeout=self.scan_timeout)
             await self.set_qrcode_task_status(task_key, QRCodeTaskStatus.OK)
         except PlaywrightTimeoutError:

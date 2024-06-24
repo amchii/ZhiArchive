@@ -32,7 +32,12 @@
       .then(data => {
         console.log(data)
         // 将获取的二维码URL设置到img元素中
-        document.getElementById('qrimage').src = "/zhi/login/qrcode/" + data.qrcode + "?timeout=10";
+        let qr_image = document.getElementById("qrimage")
+        qr_image.src = "/zhi/login/qrcode/" + data.qrcode;
+        qr_image.onerror = function () {
+          console.log('二维码加载失败');
+          qr_image.src = "/zhi/login/qrcode/" + data.qrcode + '?timestamp=' + new Date().getTime();
+        }
         // 开始轮询用户扫码状态
         pollUserScanStatus(data.qrcode);
       })
@@ -43,7 +48,7 @@
 
   // 轮询用户扫码状态
   function pollUserScanStatus(qrcode) {
-    // 每2秒钟轮询一次
+    // 每秒钟轮询一次
     timer = setInterval(() => {
       // 发起请求并获取用户扫码状态
       // 用户扫码状态接口 URL
