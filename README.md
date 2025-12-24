@@ -51,6 +51,21 @@
 }
 ```
 
+## 目录
+- [简介](#1-简介)
+- [使用](#2-使用)
+  - [Docker](#docker)
+    - [下载本项目](#下载本项目)
+    - [构建镜像](#构建镜像)
+    - [配置环境变量](#配置环境变量)
+    - [启动](#启动)
+    - [初始化](#初始化)
+  - [运行Monitor和Archiver](#运行monitor和archiver)
+- [已知问题](#已知问题)
+- [TODO](#todo)
+
+---
+
 # 1. 简介
 
 `ZhiArchive`使用[Playwright](https://github.com/microsoft/playwright)，它由4个部分组成，分别是monitor，archiver，login worker和api：
