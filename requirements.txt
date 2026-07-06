@@ -6,25 +6,25 @@ annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
     # via pydantic
-anyio==4.12.0
+anyio==4.14.1
     # via
     #   starlette
     #   watchfiles
-cffi==2.0.0
+cffi==2.1.0
     # via cryptography
-click==8.3.1
+click==8.4.2
     # via uvicorn
-cryptography==46.0.3
+cryptography==49.0.0
     # via zhi-archive (pyproject.toml)
-fastapi==0.127.0
+fastapi==0.139.0
     # via zhi-archive (pyproject.toml)
-greenlet==3.3.0
+greenlet==3.5.3
     # via playwright
 h11==0.16.0
     # via uvicorn
-httptools==0.7.1
+httptools==0.8.0
     # via uvicorn
-idna==3.11
+idna==3.18
     # via anyio
 jinja2==3.1.6
     # via zhi-archive (pyproject.toml)
@@ -32,37 +32,37 @@ markupsafe==3.0.3
     # via jinja2
 pathvalidate==3.3.1
     # via zhi-archive (pyproject.toml)
-playwright==1.57.0
+playwright==1.61.0
     # via
     #   zhi-archive (pyproject.toml)
     #   playwright-stealth
-playwright-stealth==2.0.0
+playwright-stealth==2.0.3
     # via zhi-archive (pyproject.toml)
-pycparser==2.23
+pycparser==3.0
     # via cffi
-pydantic==2.12.5
+pydantic==2.13.4
     # via
     #   fastapi
     #   pydantic-settings
-pydantic-core==2.41.5
+pydantic-core==2.46.4
     # via pydantic
-pydantic-settings==2.12.0
+pydantic-settings==2.14.2
     # via zhi-archive (pyproject.toml)
-pyee==13.0.0
+pyee==13.0.1
     # via playwright
-pyjwt==2.10.1
+pyjwt==2.13.0
     # via zhi-archive (pyproject.toml)
-python-dotenv==1.2.1
+python-dotenv==1.2.2
     # via
     #   pydantic-settings
     #   uvicorn
 pyyaml==6.0.3
     # via uvicorn
-redis==7.1.0
+redis==8.0.1
     # via zhi-archive (pyproject.toml)
-starlette==0.50.0
+starlette==1.3.1
     # via fastapi
-typing-extensions==4.15.0
+typing-extensions==4.16.0
     # via
     #   anyio
     #   fastapi
@@ -73,13 +73,14 @@ typing-extensions==4.15.0
     #   typing-inspection
 typing-inspection==0.4.2
     # via
+    #   fastapi
     #   pydantic
     #   pydantic-settings
-uvicorn==0.40.0
+uvicorn==0.50.2
     # via zhi-archive (pyproject.toml)
 uvloop==0.22.1
     # via uvicorn
-watchfiles==1.1.1
+watchfiles==1.2.0
     # via uvicorn
-websockets==15.0.1
+websockets==16.0
     # via uvicorn

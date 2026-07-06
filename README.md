@@ -54,6 +54,7 @@
 ## 目录
 - [简介](#1-简介)
 - [使用](#2-使用)
+  - [本地运行](#本地运行)
   - [Docker](#docker)
     - [下载本项目](#下载本项目)
     - [构建镜像](#构建镜像)
@@ -85,7 +86,51 @@
 
 *login_worker: login_worker.log*
 
+## 本地运行
 
+项目依赖由 `uv` 管理，不提交 `uv.lock`。首次运行或依赖变更后执行：
+
+```sh
+uv venv
+uv pip install -r requirements.txt
+uv pip install --group dev
+. .venv/bin/activate
+playwright install chromium
+```
+
+运行 API：
+
+```sh
+bash run_api.sh
+```
+
+或直接运行 worker：
+
+```sh
+python run_login_worker.py
+python run_monitor.py
+python run_archiver.py
+python run_all_workers_in_one.py
+```
+
+代码检查和测试：
+
+```sh
+ruff check archive
+pytest
+```
+
+如需使用国内 PyPI 镜像，可在安装前设置 `UV_DEFAULT_INDEX`，例如：
+
+```sh
+export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple/
+```
+
+更新运行依赖导出文件：
+
+```sh
+uv pip compile pyproject.toml -o requirements.txt
+```
 
 ## Docker
 
@@ -95,7 +140,7 @@
 # 下载本项目
 git clone https://github.com/amchii/ZhiArchive.git
 # 进入项目目录
-cd ZhiArhive
+cd ZhiArchive
 ```
 
 ### 构建镜像

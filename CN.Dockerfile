@@ -15,7 +15,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple && \
-    pip install uv
+    pip install --no-cache-dir uv==0.11.7
 
 ENV UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple/
 ENV PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright
@@ -28,16 +28,16 @@ RUN useradd -m -u 1000 pwuser
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
 
-COPY ./requirements.txt /opt/zhi-archive/requirements.txt
-RUN uv pip install --system -r /opt/zhi-archive/requirements.txt
+COPY ./requirements.txt /opt/zhi_archive/requirements.txt
+RUN uv pip install --system -r /opt/zhi_archive/requirements.txt
 
 # 3. 安装浏览器和系统依赖
 # 注意：这一步仍需以 Root 运行，因为 --with-deps 需要安装系统库(apt-get)
 RUN playwright install --with-deps chromium && rm -rf /var/lib/apt/lists/* && \
     chmod -R 777 $PLAYWRIGHT_BROWSERS_PATH
 
-COPY ./ /opt/zhi-archive
-WORKDIR /opt/zhi-archive
+COPY ./ /opt/zhi_archive
+WORKDIR /opt/zhi_archive
 
 # 5. 确保项目目录权限（可选，但在某些环境下对写文件很有必要）
-RUN chmod -R 777 /opt/zhi-archive
+RUN chmod -R 777 /opt/zhi_archive

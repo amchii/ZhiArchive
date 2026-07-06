@@ -21,10 +21,17 @@ ZhiArchive 是一个用于监测知乎用户动态并将相关内容保存到本
 创建或更新环境：
 
 ```sh
-python -m venv .venv
+uv venv
+uv pip install -r requirements.txt
+uv pip install --group dev
 . .venv/bin/activate
-pip install -r requirements.txt
 playwright install chromium
+```
+
+项目不提交 `uv.lock`；更新运行依赖导出文件时使用：
+
+```sh
+uv pip compile pyproject.toml -o requirements.txt
 ```
 
 运行 API：

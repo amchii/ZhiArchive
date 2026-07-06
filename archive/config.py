@@ -24,7 +24,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     debug: bool = False
-    secret_key: str = "unsafe secret key"  # 请生成一个随机字符串
+    secret_key: str = (
+        "unsafe development secret key, please change me"  # 请生成一个随机字符串
+    )
     root_dir: pathlib.Path = pathlib.Path(__file__).resolve().parent.parent
     results_dir: pathlib.Path = root_dir.joinpath(
         "results"
@@ -62,14 +64,13 @@ class Settings(BaseSettings):
 
 
 class APISettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".apienv", extra="ignore")
+
     # API认证账号
     enable_auth: bool = False
     username: str = "admin"
     password: str = "admin123456"
     cookies_max_age: int = 60 * 60 * 24 * 30
-
-    class Config:
-        env_file = ".apienv"
 
 
 settings = Settings()
