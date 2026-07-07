@@ -122,6 +122,12 @@
             pointer-events: none;
         }
 
+        .placeholder.idle .pulse {
+            animation: none;
+            box-shadow: none;
+            opacity: 0.72;
+        }
+
         .pulse {
             width: 38px;
             height: 38px;
@@ -192,6 +198,13 @@
         .ghost-btn:active {
             transform: translateY(0);
         }
+
+        .ghost-btn:disabled {
+            cursor: not-allowed;
+            opacity: 0.58;
+            transform: none;
+            box-shadow: none;
+        }
     </style>
 </head>
 <body>
@@ -202,18 +215,18 @@
 
     <div class="qr-area">
         <div class="qr-frame" aria-live="polite">
-            <div class="placeholder" id="qr-placeholder">
+            <div class="placeholder idle" id="qr-placeholder">
                 <div class="pulse"></div>
-                <div id="placeholder-text">正在获取二维码...</div>
+                <div id="placeholder-text">点击下方按钮获取二维码</div>
             </div>
             <img id="qrimage" alt="知乎登录二维码">
         </div>
         <div class="status">
-            <p id="status-main">正在申请二维码...</p>
-            <p id="status-sub">二维码需要数秒生成，请保持页面开启。</p>
+            <p id="status-main">等待获取二维码</p>
+            <p id="status-sub">确认 login worker 已启动后，点击按钮创建扫码登录任务。</p>
         </div>
         <div class="actions">
-            <button class="ghost-btn" id="retry-btn" type="button">重新获取</button>
+            <button class="ghost-btn" id="retry-btn" type="button" disabled>获取二维码</button>
         </div>
     </div>
 </div>
@@ -241,18 +254,14 @@
     return false;
   }
 
-  (async () => {
-    const authed = await ensureAuthenticated();
-    if (!authed) {
-      return;
-    }
+  (() => {
     const qrImage = document.getElementById('qrimage');
     const placeholder = document.getElementById('qr-placeholder');
     const placeholderText = document.getElementById('placeholder-text');
     const statusMain = document.getElementById('status-main');
     const statusSub = document.getElementById('status-sub');
     const retryBtn = document.getElementById('retry-btn');
-    const redirectUrl = "{{ redirect_url | default('/zhi/core/config') }}";
+    const redirectUrl = {{ redirect_url | default('/') | tojson }};
     const WAIT_FOR_WORKER_MS = 45000;
 
     let currentPrefix = null;
@@ -260,6 +269,7 @@
     let scanTimer = null;
     let refreshing = false;
     let lastRequestAt = 0;
+    let authReady = false;
 
     function setStatus(main, sub) {
       statusMain.textContent = main;
@@ -268,14 +278,26 @@
       }
     }
 
-    function showPlaceholder(message) {
+    function showPlaceholder(message, idle = false) {
       placeholderText.textContent = message;
+      placeholder.classList.toggle('idle', idle);
       placeholder.classList.remove('hidden');
       qrImage.classList.remove('visible');
     }
 
     function hidePlaceholder() {
       placeholder.classList.add('hidden');
+    }
+
+    function resetToIdle() {
+      clearInterval(imageTimer);
+      clearInterval(scanTimer);
+      currentPrefix = null;
+      qrImage.removeAttribute('src');
+      qrImage.classList.remove('visible');
+      showPlaceholder('点击下方按钮获取二维码', true);
+      setStatus('等待获取二维码', '确认 login worker 已启动后，点击按钮创建扫码登录任务。');
+      retryBtn.textContent = '获取二维码';
     }
 
     function startImagePolling(prefix) {
@@ -368,6 +390,8 @@
         return;
       }
       refreshing = true;
+      retryBtn.disabled = true;
+      retryBtn.textContent = isRetry ? '重新获取中...' : '获取中...';
       lastRequestAt = Date.now();
       clearInterval(imageTimer);
       clearInterval(scanTimer);
@@ -393,11 +417,37 @@
         setStatus('二维码获取失败', '请检查网络后重试。');
       } finally {
         refreshing = false;
+        retryBtn.disabled = false;
+        retryBtn.textContent = currentPrefix ? '重新获取' : '获取二维码';
       }
     }
 
-    retryBtn.addEventListener('click', () => refreshQRCode(true));
-    document.addEventListener('DOMContentLoaded', () => refreshQRCode());
+    retryBtn.addEventListener('click', async () => {
+      if (!authReady) {
+        retryBtn.disabled = true;
+        setStatus('正在检查控制台登录状态...', '通过后即可获取知乎登录二维码。');
+        authReady = await ensureAuthenticated();
+        retryBtn.disabled = false;
+        if (!authReady) {
+          return;
+        }
+      }
+      await refreshQRCode(Boolean(currentPrefix));
+    });
+
+    resetToIdle();
+    retryBtn.disabled = true;
+    setStatus('正在检查控制台登录状态...', '通过后即可获取知乎登录二维码。');
+    ensureAuthenticated().then((authed) => {
+      authReady = authed;
+      if (authed) {
+        retryBtn.disabled = false;
+        resetToIdle();
+      } else {
+        setStatus('无法确认控制台登录状态', '请刷新页面或重新登录后再获取二维码。');
+      }
+    });
+
     window.addEventListener('beforeunload', () => {
       clearInterval(imageTimer);
       clearInterval(scanTimer);

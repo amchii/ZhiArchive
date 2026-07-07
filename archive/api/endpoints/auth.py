@@ -24,9 +24,7 @@ def login(username: Annotated[str, Body()], password: Annotated[str, Body()]):
 
 @router.get("/login", response_class=HTMLResponse)
 def login_view(request: Request):
-    redirect_url = request.query_params.get(
-        "redirect", str(request.url_for("zhi:config_view"))
-    )
+    redirect_url = request.query_params.get("redirect", str(request.url_for("index")))
     return templates.TemplateResponse(
         request,
         "login.html",

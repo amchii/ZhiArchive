@@ -46,7 +46,7 @@ async def login_view(request: Request):
         request,
         "qrcode.html",
         context={
-            "redirect_url": str(request.url_for("zhi:config_view")),
+            "redirect_url": str(request.url_for("index")),
         },
     )
 

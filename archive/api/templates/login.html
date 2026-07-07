@@ -6,15 +6,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       :root {
-        --bg: #0c1220;
-        --panel: rgba(17, 24, 39, 0.82);
-        --card: rgba(23, 32, 49, 0.9);
-        --border: rgba(255, 255, 255, 0.08);
-        --accent: #2dd4bf;
-        --accent-strong: #14b8a6;
-        --text: #e8edf7;
-        --muted: #94a3b8;
-        --error: #f87171;
+        color-scheme: dark;
+        --bg: #101418;
+        --panel: #151b21;
+        --panel-soft: #1b232b;
+        --border: #2b3640;
+        --border-strong: #3b4a56;
+        --text: #edf2f7;
+        --muted: #93a3b1;
+        --accent: #3dd6a5;
+        --accent-dark: #18a77a;
+        --danger: #ff7a7a;
+        --danger-bg: #3a2224;
+        --info-bg: #172b35;
+        --shadow: rgba(0, 0, 0, 0.28);
       }
 
       * {
@@ -24,307 +29,346 @@
       body {
         margin: 0;
         min-height: 100vh;
-        font-family: "Manrope", "Segoe UI", sans-serif;
-        background: radial-gradient(
-            circle at 20% 20%,
-            rgba(45, 212, 191, 0.08),
-            transparent 35%
-          ),
-          radial-gradient(
-            circle at 80% 0%,
-            rgba(125, 211, 252, 0.08),
-            transparent 30%
-          ),
-          linear-gradient(135deg, #0b1220 0%, #0e172a 60%, #0c1220 100%);
+        font-family: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+        background: var(--bg);
         color: var(--text);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 32px 20px;
+        display: grid;
+        place-items: center;
+        padding: 24px;
       }
 
       .shell {
-        width: min(1080px, 100%);
+        width: min(960px, 100%);
+        min-height: 560px;
         display: grid;
-        grid-template-columns: 1.1fr 0.9fr;
-        gap: 28px;
-        align-items: stretch;
-      }
-
-      @media (max-width: 900px) {
-        .shell {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      .panel {
+        grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+        border: 1px solid var(--border);
         background: var(--panel);
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        padding: 32px;
-        box-shadow: 0 20px 80px rgba(0, 0, 0, 0.35),
-          0 0 0 1px rgba(255, 255, 255, 0.03);
+        box-shadow: 0 24px 80px var(--shadow);
       }
 
-      .panel h1 {
-        margin: 0 0 10px;
-        font-size: 30px;
-        letter-spacing: 0.5px;
-      }
-
-      .panel p {
-        margin: 0 0 20px;
-        color: var(--muted);
-        line-height: 1.6;
-      }
-
-      .badges {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-        margin-top: 16px;
-      }
-
-      .badge {
-        border: 1px solid var(--border);
-        border-radius: 999px;
-        padding: 8px 12px;
-        color: var(--muted);
-        background: rgba(255, 255, 255, 0.02);
-        font-size: 13px;
-        letter-spacing: 0.2px;
-      }
-
-      .form-card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 20px;
-        padding: 28px;
+      .summary {
+        border-right: 1px solid var(--border);
+        background: #12181e;
+        padding: 34px;
         display: flex;
         flex-direction: column;
-        gap: 18px;
-        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.32),
-          0 0 0 1px rgba(255, 255, 255, 0.02);
+        justify-content: space-between;
+        gap: 28px;
       }
 
-      .form-header {
+      .brand {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .brand-mark {
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--border-strong);
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 28px;
+        font-weight: 750;
+        letter-spacing: 0;
+      }
+
+      .summary p,
+      .field-note,
+      .status-text {
+        color: var(--muted);
+        line-height: 1.65;
+        font-size: 14px;
+      }
+
+      .status-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .status-item {
         display: flex;
         justify-content: space-between;
+        gap: 12px;
+        padding: 11px 0;
+        border-bottom: 1px solid var(--border);
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .status-item strong {
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      .content {
+        padding: 46px;
+        display: flex;
         align-items: center;
       }
 
-      .form-header h2 {
-        margin: 0;
-        font-size: 22px;
+      .login-panel,
+      .logged-panel {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
       }
 
-      .hint {
-        margin: 4px 0 0;
-        color: var(--muted);
-        font-size: 13px;
+      .panel-heading {
+        display: grid;
+        gap: 8px;
+      }
+
+      .panel-heading h2 {
+        font-size: 24px;
+        font-weight: 720;
+        letter-spacing: 0;
+      }
+
+      .form-grid {
+        display: grid;
+        gap: 16px;
       }
 
       label {
-        font-size: 14px;
-        color: var(--muted);
         display: block;
-        margin-bottom: 6px;
+        margin-bottom: 7px;
+        color: var(--muted);
+        font-size: 13px;
       }
 
       input[type="text"],
       input[type="password"] {
         width: 100%;
-        padding: 12px 14px;
-        border-radius: 12px;
+        min-height: 46px;
         border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.04);
+        background: var(--panel-soft);
         color: var(--text);
+        padding: 11px 12px;
         font-size: 15px;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease,
-          background 0.2s ease;
+        outline: none;
+        transition: border-color 0.16s ease, background 0.16s ease;
       }
 
       input[type="text"]:focus,
       input[type="password"]:focus {
-        outline: none;
-        border-color: rgba(45, 212, 191, 0.6);
-        box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.08);
-        background: rgba(255, 255, 255, 0.06);
+        border-color: var(--accent);
+        background: #202a32;
       }
 
       .actions {
         display: flex;
-        gap: 12px;
         align-items: center;
-        margin-top: 4px;
+        gap: 12px;
+        flex-wrap: wrap;
       }
 
-      .btn,
-      button[type="submit"] {
-        display: inline-block;
-        text-decoration: none;
-        text-align: center;
-        background: linear-gradient(
-          135deg,
-          var(--accent) 0%,
-          var(--accent-strong) 100%
-        );
-        border: none;
-        color: #051016;
-        padding: 12px 18px;
-        border-radius: 12px;
-        font-size: 16px;
+      button,
+      .btn {
+        min-height: 42px;
+        border: 1px solid transparent;
+        padding: 10px 16px;
+        color: #06110d;
+        background: var(--accent);
         font-weight: 700;
+        font-size: 14px;
+        text-decoration: none;
         cursor: pointer;
-        letter-spacing: 0.2px;
-        box-shadow: 0 10px 30px rgba(45, 212, 191, 0.25);
-        transition: transform 0.15s ease, box-shadow 0.15s ease,
-          filter 0.15s ease;
+        transition: background 0.16s ease, border-color 0.16s ease,
+          opacity 0.16s ease;
       }
 
-      .btn:hover,
-      button[type="submit"]:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 14px 36px rgba(45, 212, 191, 0.32);
+      button:hover,
+      .btn:hover {
+        background: #5ee0b8;
       }
 
-      .btn:active,
-      button[type="submit"]:active {
-        transform: translateY(0);
-        filter: brightness(0.96);
-      }
-
-      .btn[disabled],
-      button[type="submit"][disabled] {
-        opacity: 0.6;
+      button:disabled {
+        opacity: 0.58;
         cursor: not-allowed;
-        transform: none;
-        box-shadow: none;
+      }
+
+      .btn.secondary,
+      button.secondary {
+        color: var(--text);
+        background: transparent;
+        border-color: var(--border-strong);
+      }
+
+      .btn.secondary:hover,
+      button.secondary:hover {
+        background: var(--panel-soft);
       }
 
       .alert {
-        border-radius: 12px;
-        padding: 12px 14px;
-        font-size: 14px;
         border: 1px solid var(--border);
-        background: rgba(255, 255, 255, 0.03);
-        color: var(--text);
+        padding: 12px 13px;
+        font-size: 14px;
+        line-height: 1.5;
       }
 
       .alert.error {
-        border-color: rgba(248, 113, 113, 0.4);
-        background: rgba(248, 113, 113, 0.08);
-        color: #fecdd3;
+        border-color: #674044;
+        background: var(--danger-bg);
+        color: #ffd6d6;
       }
 
       .alert.info {
-        border-color: rgba(125, 211, 252, 0.35);
-        background: rgba(125, 211, 252, 0.08);
-        color: #dbeafe;
+        border-color: #284653;
+        background: var(--info-bg);
+        color: #d8eef7;
       }
 
-      .toast {
+      .session-line {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 10px;
       }
 
-      .toast-dot {
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
+      .session-dot {
+        width: 9px;
+        height: 9px;
         background: var(--accent);
-        box-shadow: 0 0 0 6px rgba(45, 212, 191, 0.2);
+        border-radius: 50%;
+      }
+
+      @media (max-width: 780px) {
+        body {
+          padding: 0;
+          place-items: stretch;
+        }
+
+        .shell {
+          min-height: 100vh;
+          grid-template-columns: 1fr;
+          border: none;
+        }
+
+        .summary {
+          border-right: none;
+          border-bottom: 1px solid var(--border);
+          padding: 24px;
+        }
+
+        .content {
+          padding: 28px 24px 34px;
+          align-items: flex-start;
+        }
+
+        h1 {
+          font-size: 24px;
+        }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <div class="panel">
-        <h1>ZhiArchive 控制台</h1>
-        <p>
-          登录后可管理采集进度、监控配置与运行状态。凭证会直接发送至
-          API，不会在浏览器中持久保存。
-        </p>
-        <div class="badges">
-          <span class="badge">安全登录</span>
-          <span class="badge">快速访问</span>
-          <span class="badge">内网可用</span>
-        </div>
-        {% if toast %}
-        <div class="alert info" style="margin-top: 20px">
-          <div class="toast">
-            <span class="toast-dot"></span>
-            <span>{{ toast }}</span>
+    <main class="shell">
+      <section class="summary" aria-label="ZhiArchive 信息">
+        <div class="brand">
+          <div class="brand-mark">Z</div>
+          <div>
+            <h1>ZhiArchive</h1>
+            <p>登录管理控制台，配置知乎登录态、监控任务与归档任务。</p>
           </div>
         </div>
-        {% endif %}
-      </div>
-      <div class="form-card" id="login-card">
-        <div class="form-header">
-          <h2>登录账户</h2>
-          <span class="hint">使用 API 提供的管理员凭证</span>
-        </div>
-        <div id="feedback" class="alert error" style="display: none"></div>
-        <form id="login-form" novalidate>
-          <div>
-            <label for="username">用户名</label>
-            <input
-              type="text"
-              id="username"
-              name="username"
-              autocomplete="username"
-              required
-            />
+
+        <div class="status-list" aria-label="登录说明">
+          <div class="status-item">
+            <span>认证范围</span>
+            <strong>API 控制台</strong>
           </div>
-          <div>
-            <label for="password">密码</label>
-            <input
-              type="password"
-              id="password"
-              name="password"
-              autocomplete="current-password"
-              required
-            />
+          <div class="status-item">
+            <span>凭证来源</span>
+            <strong>.apienv</strong>
+          </div>
+          <div class="status-item">
+            <span>登录后跳转</span>
+            <strong>来源页面</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="content">
+        <div class="login-panel" id="login-card">
+          <div class="panel-heading">
+            <h2>控制台登录</h2>
+            <p class="status-text">请输入 API 管理员用户名和密码。</p>
+          </div>
+
+          {% if toast %}
+          <div class="alert info">{{ toast }}</div>
+          {% endif %}
+          <div id="feedback" class="alert error" style="display: none"></div>
+
+          <form id="login-form" class="form-grid" novalidate>
+            <div>
+              <label for="username">用户名</label>
+              <input
+                type="text"
+                id="username"
+                name="username"
+                autocomplete="username"
+                required
+              />
+            </div>
+            <div>
+              <label for="password">密码</label>
+              <input
+                type="password"
+                id="password"
+                name="password"
+                autocomplete="current-password"
+                required
+              />
+            </div>
+            <div class="actions">
+              <button type="submit" id="submit-btn">登录</button>
+              <span class="field-note">成功后自动回到目标页面</span>
+            </div>
+          </form>
+        </div>
+
+        <div class="logged-panel" id="logged-in-card" style="display: none">
+          <div class="panel-heading">
+            <h2>已登录</h2>
+            <p class="status-text">当前浏览器已持有有效 API 登录态。</p>
+          </div>
+          <div class="alert info">
+            <div class="session-line">
+              <span class="session-dot"></span>
+              <span>当前用户: <strong id="current-user"></strong></span>
+            </div>
           </div>
           <div class="actions">
-            <button type="submit" id="submit-btn">登录</button>
-            <span class="hint">登录后自动跳回来源页</span>
-          </div>
-        </form>
-      </div>
-
-      <div class="form-card" id="logged-in-card" style="display: none">
-        <div class="form-header">
-          <h2>已登录</h2>
-          <span class="hint">当前状态</span>
-        </div>
-        <div class="alert info">
-          <div class="toast">
-            <span class="toast-dot"></span>
-            <span>您已登录为: <strong id="current-user"></strong></span>
+            <a href="/" class="btn">进入控制台</a>
+            <button type="button" id="logout-btn" onclick="logout()" class="secondary">
+              注销
+            </button>
           </div>
         </div>
-        <div class="actions">
-          <a href="/zhi/core/config" class="btn">去配置页</a>
-          <button
-            type="button"
-            id="logout-btn"
-            onclick="logout()"
-            class="btn"
-            style="background: rgba(255, 255, 255, 0.1); box-shadow: none"
-          >
-            注销
-          </button>
-        </div>
-      </div>
-    </div>
+      </section>
+    </main>
 
     <script>
       const form = document.getElementById('login-form');
       const feedback = document.getElementById('feedback');
       const submitBtn = document.getElementById('submit-btn');
-      const defaultRedirect = {{ redirect_url | default('/zhi/core/config') | tojson }};
+      const defaultRedirect = {{ redirect_url | default('/') | tojson }};
       const loginUrl = {{ login_url | tojson }};
       const urlParams = new URLSearchParams(window.location.search);
       const redirectUrl = urlParams.get('redirect') || defaultRedirect;
@@ -380,22 +424,21 @@
 
       async function checkLogin() {
         try {
-            const res = await fetch('/auth/me');
-            if (res.ok) {
-                const data = await res.json();
-                document.getElementById('login-card').style.display = 'none';
-                document.getElementById('logged-in-card').style.display = 'flex';
-                document.getElementById('current-user').textContent = data.username;
-            }
+          const res = await fetch('/auth/me');
+          if (res.ok) {
+            const data = await res.json();
+            document.getElementById('login-card').style.display = 'none';
+            document.getElementById('logged-in-card').style.display = 'flex';
+            document.getElementById('current-user').textContent = data.username;
+          }
         } catch (e) {
-            console.error('Login check failed:', e);
+          console.error('Login check failed:', e);
         }
       }
 
       function logout() {
-          // Clear token cookie
-          document.cookie = 'token=; Max-Age=0; path=/;';
-          window.location.reload();
+        document.cookie = 'token=; Max-Age=0; path=/;';
+        window.location.reload();
       }
     </script>
   </body>

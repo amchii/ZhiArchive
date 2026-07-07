@@ -133,7 +133,10 @@
             display: inline-block;
         }
 
-        input[type=text] {
+        input[type=text],
+        input[type=number],
+        input[type=datetime-local],
+        select {
             width: 100%;
             padding: 12px 14px;
             border-radius: 12px;
@@ -144,11 +147,18 @@
             transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
         }
 
-        input[type=text]:focus {
+        input[type=text]:focus,
+        input[type=number]:focus,
+        input[type=datetime-local]:focus,
+        select:focus {
             outline: none;
             border-color: rgba(45, 212, 191, 0.6);
             box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.08);
             background: rgba(255, 255, 255, 0.06);
+        }
+
+        select {
+            appearance: none;
         }
 
         textarea {
@@ -181,6 +191,55 @@
             display: flex;
             flex-direction: column;
             gap: 10px;
+        }
+
+        .config-form {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        @media (max-width: 760px) {
+            .config-form {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .field {
+            min-width: 0;
+        }
+
+        .field.wide {
+            grid-column: 1 / -1;
+        }
+
+        .field-help {
+            margin: 6px 0 0;
+            color: var(--muted);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .empty-state {
+            padding: 14px;
+            border: 1px dashed var(--border);
+            border-radius: 12px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .json-preview {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .json-preview[hidden] {
+            display: none;
+        }
+
+        .json-preview textarea {
+            height: 160px;
         }
 
         .actions {
@@ -316,17 +375,23 @@
                     <p class="eyebrow">Archiver</p>
                     <h2>归档配置</h2>
                 </div>
-                <div class="pill">JSON</div>
+                <div class="pill">表单</div>
             </div>
             <div class="inputs">
                 <label for="archiverConfigReadOnly">只读配置</label>
                 <textarea id="archiverConfigReadOnly" readonly></textarea>
-                <label for="archiverConfig">可编辑配置</label>
-                <textarea id="archiverConfig"></textarea>
+                <label>可编辑配置</label>
+                <div class="config-form" id="archiverConfig"></div>
+                <div class="json-preview" id="archiverConfigJsonPanel" hidden>
+                    <label for="archiverConfigJson">当前表单 JSON</label>
+                    <textarea id="archiverConfigJson" readonly></textarea>
+                </div>
             </div>
             <div class="actions">
                 <button class="ghost" data-refresh="archiver" type="button">刷新</button>
-                <button class="primary" type="button" onclick="submitJSONUpdate('archiver')">保存变更</button>
+                <button class="ghost" id="archiverConfigJsonToggle" type="button"
+                        onclick="toggleConfigJSON('archiver')">查看 JSON</button>
+                <button class="primary" type="button" onclick="submitConfigUpdate('archiver')">保存变更</button>
             </div>
         </div>
 
@@ -336,17 +401,23 @@
                     <p class="eyebrow">Monitor</p>
                     <h2>监控配置</h2>
                 </div>
-                <div class="pill">JSON</div>
+                <div class="pill">表单</div>
             </div>
             <div class="inputs">
                 <label for="monitorConfigReadOnly">只读配置</label>
                 <textarea id="monitorConfigReadOnly" readonly></textarea>
-                <label for="monitorConfig">可编辑配置</label>
-                <textarea id="monitorConfig"></textarea>
+                <label>可编辑配置</label>
+                <div class="config-form" id="monitorConfig"></div>
+                <div class="json-preview" id="monitorConfigJsonPanel" hidden>
+                    <label for="monitorConfigJson">当前表单 JSON</label>
+                    <textarea id="monitorConfigJson" readonly></textarea>
+                </div>
             </div>
             <div class="actions">
                 <button class="ghost" data-refresh="monitor" type="button">刷新</button>
-                <button class="primary" type="button" onclick="submitJSONUpdate('monitor')">保存变更</button>
+                <button class="ghost" id="monitorConfigJsonToggle" type="button"
+                        onclick="toggleConfigJSON('monitor')">查看 JSON</button>
+                <button class="primary" type="button" onclick="submitConfigUpdate('monitor')">保存变更</button>
             </div>
         </div>
     </div>
@@ -411,7 +482,12 @@
     fetch(`${endpoint}?filter=${filter}`)
       .then(response => response.json())
       .then(data => {
-        document.getElementById(elementId).value = JSON.stringify(data, undefined, 2);
+        const element = document.getElementById(elementId);
+        if (element.matches('textarea')) {
+          element.value = JSON.stringify(data, undefined, 2);
+        } else {
+          renderConfigForm(element, data);
+        }
       })
       .catch(error => console.error('Failed to fetch config:', error));
   }
@@ -421,35 +497,231 @@
     fetchConfig(`/zhi/core/${type}/configs`, 'read_only', `${type}ConfigReadOnly`);
   }
 
-  function submitJSONUpdate(type) {
-    const configData = document.getElementById(type + 'Config').value;
-    try {
-      const json = JSON.parse(configData);
+  const configLabels = {
+    people: '知乎用户 ID',
+    page_default_timeout: '页面默认超时',
+    interval: '执行间隔',
+    screenshot_max_page_scroll_height: '截图最大滚动高度',
+    fetch_until: '抓取截止时间',
+    save_type: '保存格式'
+  };
 
-      fetch('/zhi/core/' + type + '/configs', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(json)
-      })
-        .then(response => {
-          if (response.ok) {
-            alert('The ' + type + ' configuration has been updated successfully!');
-            response.json().then(data => {
-              document.getElementById(type + 'Config').value = JSON.stringify(data, undefined, 2);
-            });
-            fetchConfig(`/zhi/core/${type}/configs`, 'read_only', `${type}ConfigReadOnly`);
-          } else {
-            alert('Failed to update ' + type + ' configuration.');
-          }
-        })
-        .catch(error => {
-          console.error('Failed to update config:', error);
-        });
-    } catch (e) {
-      alert('Invalid JSON format: ' + e.message);
+  const configHelp = {
+    people: '知乎个人主页 URL 中 /people/ 后面的标识。',
+    page_default_timeout: '单位为毫秒，影响 Playwright 等待页面的最长时间。',
+    interval: '单位为秒，worker 两次执行之间的等待时间。',
+    screenshot_max_page_scroll_height: '0 表示不限制截图高度。',
+    fetch_until: 'Monitor 会抓取到这个时间点为止。',
+    save_type: '截图文件格式。'
+  };
+
+  const selectOptions = {
+    save_type: ['jpeg', 'png']
+  };
+
+  function humanizeConfigKey(key) {
+    return configLabels[key] || key.replaceAll('_', ' ');
+  }
+
+  function inferConfigType(key, value) {
+    if (selectOptions[key]) {
+      return 'select';
     }
+    if (typeof value === 'number') {
+      return 'number';
+    }
+    if (typeof value === 'boolean') {
+      return 'boolean';
+    }
+    if (key.endsWith('_until') || key.endsWith('_dt')) {
+      return 'datetime';
+    }
+    if (value !== null && typeof value === 'object') {
+      return 'json';
+    }
+    return 'text';
+  }
+
+  function toDatetimeLocal(value) {
+    if (!value || typeof value !== 'string') {
+      return '';
+    }
+    const normalized = value.replace(' ', 'T');
+    const match = normalized.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2})(?::(\d{2}))?/);
+    if (!match) {
+      return value;
+    }
+    return match[2] ? `${match[1]}:${match[2]}` : match[1];
+  }
+
+  function createConfigControl(key, value, type) {
+    if (type === 'select') {
+      const select = document.createElement('select');
+      select.dataset.configKey = key;
+      select.dataset.valueType = 'string';
+      selectOptions[key].forEach(optionValue => {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = optionValue;
+        option.selected = optionValue === value;
+        select.appendChild(option);
+      });
+      return select;
+    }
+
+    if (type === 'boolean') {
+      const select = document.createElement('select');
+      select.dataset.configKey = key;
+      select.dataset.valueType = 'boolean';
+      [
+        ['true', '开启'],
+        ['false', '关闭']
+      ].forEach(([optionValue, label]) => {
+        const option = document.createElement('option');
+        option.value = optionValue;
+        option.textContent = label;
+        option.selected = String(value) === optionValue;
+        select.appendChild(option);
+      });
+      return select;
+    }
+
+    if (type === 'json') {
+      const textarea = document.createElement('textarea');
+      textarea.dataset.configKey = key;
+      textarea.dataset.valueType = 'json';
+      textarea.value = JSON.stringify(value, undefined, 2);
+      return textarea;
+    }
+
+    const input = document.createElement('input');
+    input.dataset.configKey = key;
+    input.type = type === 'number' ? 'number' : type === 'datetime' ? 'datetime-local' : 'text';
+    input.dataset.valueType = type;
+    input.value = type === 'datetime' ? toDatetimeLocal(value) : value ?? '';
+    input.required = true;
+    if (type === 'number') {
+      input.step = '1';
+    }
+    return input;
+  }
+
+  function renderConfigForm(container, data) {
+    container.replaceChildren();
+    const entries = Object.entries(data);
+    if (entries.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.textContent = '暂无可编辑配置。';
+      container.appendChild(empty);
+      return;
+    }
+
+    entries.forEach(([key, value]) => {
+      const type = inferConfigType(key, value);
+      const field = document.createElement('div');
+      field.className = (type === 'json' || (type === 'text' && String(value).length > 36))
+        ? 'field wide'
+        : 'field';
+
+      const label = document.createElement('label');
+      label.textContent = humanizeConfigKey(key);
+      field.appendChild(label);
+
+      const control = createConfigControl(key, value, type);
+      control.addEventListener('input', () => {
+        refreshConfigJSONPreview(container.id.replace('Config', ''));
+      });
+      control.addEventListener('change', () => {
+        refreshConfigJSONPreview(container.id.replace('Config', ''));
+      });
+      field.appendChild(control);
+
+      if (configHelp[key]) {
+        const help = document.createElement('p');
+        help.className = 'field-help';
+        help.textContent = configHelp[key];
+        field.appendChild(help);
+      }
+      container.appendChild(field);
+    });
+    refreshConfigJSONPreview(container.id.replace('Config', ''));
+  }
+
+  function collectConfigForm(type) {
+    const values = {};
+    document.querySelectorAll(`#${type}Config [data-config-key]`).forEach(control => {
+      const key = control.dataset.configKey;
+      const valueType = control.dataset.valueType;
+      if (valueType === 'number') {
+        const numberValue = Number(control.value);
+        if (!Number.isFinite(numberValue)) {
+          throw new Error(`${humanizeConfigKey(key)} 必须是数字`);
+        }
+        values[key] = numberValue;
+      } else if (valueType === 'boolean') {
+        values[key] = control.value === 'true';
+      } else if (valueType === 'json') {
+        values[key] = JSON.parse(control.value);
+      } else {
+        values[key] = control.value;
+      }
+    });
+    return values;
+  }
+
+  function refreshConfigJSONPreview(type) {
+    const panel = document.getElementById(`${type}ConfigJsonPanel`);
+    if (!panel || panel.hidden) {
+      return;
+    }
+    try {
+      const json = collectConfigForm(type);
+      document.getElementById(`${type}ConfigJson`).value = JSON.stringify(json, undefined, 2);
+    } catch (error) {
+      document.getElementById(`${type}ConfigJson`).value = '配置格式不正确: ' + error.message;
+    }
+  }
+
+  function toggleConfigJSON(type) {
+    const panel = document.getElementById(`${type}ConfigJsonPanel`);
+    const toggle = document.getElementById(`${type}ConfigJsonToggle`);
+    const nextHidden = !panel.hidden;
+    panel.hidden = nextHidden;
+    toggle.textContent = nextHidden ? '查看 JSON' : '隐藏 JSON';
+    refreshConfigJSONPreview(type);
+  }
+
+  function submitConfigUpdate(type) {
+    let json;
+    try {
+      json = collectConfigForm(type);
+    } catch (error) {
+      alert('配置格式不正确: ' + error.message);
+      return;
+    }
+    fetch('/zhi/core/' + type + '/configs', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(json)
+    })
+      .then(response => {
+        if (response.ok) {
+          alert('The ' + type + ' configuration has been updated successfully!');
+          response.json().then(data => {
+            renderConfigForm(document.getElementById(type + 'Config'), data);
+            refreshConfigJSONPreview(type);
+          });
+          fetchConfig(`/zhi/core/${type}/configs`, 'read_only', `${type}ConfigReadOnly`);
+        } else {
+          alert('Failed to update ' + type + ' configuration.');
+        }
+      })
+      .catch(error => {
+        console.error('Failed to update config:', error);
+      });
   }
 
   function fetchPauseState(type) {

@@ -1,7 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from archive.api.endpoints import auth, logs, zhi
+from archive.api.render import templates
 
 app = FastAPI(title="Zhi Archive")
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -17,6 +19,12 @@ app.add_middleware(
 )
 
 
-@app.get("/")
-def index():
-    return {"message": "Hello world"}
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "config.html",
+        context={
+            "zhi_login_url": str(request.url_for("zhi:login_view")),
+        },
+    )
