@@ -18,4 +18,8 @@ services:
     command: python run_all_workers_in_one.py
     volumes:
       - ./:/opt/zhi_archive
+    environment:
+      login_worker_headless: true
+      monitor_headless: true
+      archiver_headless: true
     mem_limit: ${ALL_WORKERS_MEM_LIMIT:-100g}

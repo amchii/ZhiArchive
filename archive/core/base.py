@@ -321,9 +321,9 @@ class RedisConfigurator:
         configs = self.worker.get_configs(filter_)
         if configs_str := await self.redis.get(self.configs_key):
             all_ = json.loads(configs_str)
-            for key in configs:
-                if key in all_:
-                    configs[key] = all_[key]
+            for cfg in self.worker.get_configurable(filter_):
+                if cfg.name in all_ and not cfg.depend_on:
+                    configs[cfg.name] = all_[cfg.name]
         return configs
 
     async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):

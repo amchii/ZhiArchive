@@ -83,14 +83,37 @@
             letter-spacing: 0.2px;
         }
 
-        .grid {
+        .summary-grid,
+        .worker-grid {
             display: grid;
-            grid-template-columns: 1.05fr 1fr;
             gap: 18px;
         }
 
-        @media (max-width: 1080px) {
-            .grid {
+        .summary-grid {
+            grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.2fr) minmax(260px, 0.95fr);
+        }
+
+        .worker-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: start;
+        }
+
+        @media (max-width: 1120px) {
+            .summary-grid,
+            .worker-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (min-width: 1121px) {
+            .summary-grid .card {
+                min-height: 220px;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .summary-grid,
+            .worker-grid {
                 grid-template-columns: 1fr;
             }
         }
@@ -374,7 +397,7 @@
         </div>
     </header>
 
-    <div class="grid">
+    <div class="summary-grid">
         <div class="card">
             <div class="card-header">
                 <div>
@@ -410,7 +433,6 @@
                 <button class="primary" id="statePathSave" type="button">保存</button>
             </div>
         </div>
-
         <div class="card">
             <div class="card-header">
                 <div>
@@ -434,7 +456,9 @@
                 <button class="ghost" data-toggle="monitor" type="button">切换状态</button>
             </div>
         </div>
+    </div>
 
+    <div class="worker-grid">
         <div class="card">
             <div class="card-header">
                 <div>
