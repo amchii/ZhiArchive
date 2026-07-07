@@ -308,9 +308,57 @@
             border: 1px solid rgba(248, 113, 113, 0.45);
             color: #fecdd3;
         }
+
+        .toast-stack {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: min(360px, calc(100vw - 32px));
+            pointer-events: none;
+        }
+
+        .toast {
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--accent);
+            border-radius: 12px;
+            padding: 12px 14px;
+            background: rgba(15, 23, 42, 0.96);
+            color: var(--text);
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.38);
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.18s ease, transform 0.18s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.error {
+            border-left-color: var(--danger);
+        }
+
+        .toast-title {
+            margin: 0 0 4px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .toast-message {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
     </style>
 </head>
 <body>
+<div class="toast-stack" id="toastStack" aria-live="polite" aria-atomic="true"></div>
 <div class="page">
     <header>
         <div class="title">
@@ -327,6 +375,24 @@
     </header>
 
     <div class="grid">
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <p class="eyebrow">Global</p>
+                    <h2>目标用户</h2>
+                </div>
+                <div class="pill">全局配置</div>
+            </div>
+            <div class="inputs">
+                <label for="globalPeople">知乎用户 ID</label>
+                <input type="text" id="globalPeople" placeholder="请输入 /people/ 后面的用户标识">
+            </div>
+            <div class="actions">
+                <button class="ghost" id="globalConfigRefresh" type="button">刷新</button>
+                <button class="primary" id="globalConfigSave" type="button">保存用户</button>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header">
                 <div>
@@ -424,6 +490,31 @@
 </div>
 
 <script>
+  function showToast(title, message, tone = 'success') {
+    const stack = document.getElementById('toastStack');
+    const toast = document.createElement('div');
+    toast.className = `toast ${tone === 'error' ? 'error' : ''}`;
+    toast.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+
+    const titleEl = document.createElement('p');
+    titleEl.className = 'toast-title';
+    titleEl.textContent = title;
+
+    const messageEl = document.createElement('p');
+    messageEl.className = 'toast-message';
+    messageEl.textContent = message;
+
+    toast.appendChild(titleEl);
+    toast.appendChild(messageEl);
+    stack.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('show'));
+
+    window.setTimeout(() => {
+      toast.classList.remove('show');
+      toast.addEventListener('transitionend', () => toast.remove(), {once: true});
+    }, 3200);
+  }
+
   function redirectToLogin() {
     const target = encodeURIComponent(window.location.href);
     window.location.replace(`/auth/login?redirect=${target}`);
@@ -467,13 +558,54 @@
     })
       .then(response => {
         if (response.ok) {
-          alert('State path updated successfully!');
+          showToast('保存成功', '知乎 Cookies 路径已更新。');
         } else {
-          alert('Failed to update state path.');
+          showToast('保存失败', '知乎 Cookies 路径更新失败。', 'error');
         }
       })
       .catch(error => {
         console.error('Failed to update state path:', error);
+        showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
+      });
+  }
+
+  function fetchGlobalConfigs() {
+    fetch('/zhi/core/configs')
+      .then(response => response.json())
+      .then(data => {
+        document.getElementById('globalPeople').value = data.people || '';
+      })
+      .catch(error => console.error('Failed to fetch global config:', error));
+  }
+
+  function submitGlobalConfigs() {
+    const people = document.getElementById('globalPeople').value.trim();
+    if (!people) {
+      showToast('保存失败', '知乎用户 ID 不能为空。', 'error');
+      return;
+    }
+    fetch('/zhi/core/configs', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({people: people})
+    })
+      .then(response => {
+        if (response.ok) {
+          showToast('保存成功', '目标用户已更新，worker 下一轮运行时生效。');
+          response.json().then(data => {
+            document.getElementById('globalPeople').value = data.people || people;
+            refreshConfigs('archiver');
+            refreshConfigs('monitor');
+          });
+        } else {
+          showToast('保存失败', '目标用户更新失败。', 'error');
+        }
+      })
+      .catch(error => {
+        console.error('Failed to update global config:', error);
+        showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
       });
   }
 
@@ -521,6 +653,10 @@
 
   function humanizeConfigKey(key) {
     return configLabels[key] || key.replaceAll('_', ' ');
+  }
+
+  function humanizeWorkerName(type) {
+    return type === 'archiver' ? 'Archiver' : 'Monitor';
   }
 
   function inferConfigType(key, value) {
@@ -697,7 +833,7 @@
     try {
       json = collectConfigForm(type);
     } catch (error) {
-      alert('配置格式不正确: ' + error.message);
+      showToast('配置格式不正确', error.message, 'error');
       return;
     }
     fetch('/zhi/core/' + type + '/configs', {
@@ -709,18 +845,19 @@
     })
       .then(response => {
         if (response.ok) {
-          alert('The ' + type + ' configuration has been updated successfully!');
+          showToast('保存成功', `${humanizeWorkerName(type)} 配置已更新。`);
           response.json().then(data => {
             renderConfigForm(document.getElementById(type + 'Config'), data);
             refreshConfigJSONPreview(type);
           });
           fetchConfig(`/zhi/core/${type}/configs`, 'read_only', `${type}ConfigReadOnly`);
         } else {
-          alert('Failed to update ' + type + ' configuration.');
+          showToast('保存失败', `${humanizeWorkerName(type)} 配置更新失败。`, 'error');
         }
       })
       .catch(error => {
         console.error('Failed to update config:', error);
+        showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
       });
   }
 
@@ -754,11 +891,12 @@
           pauseDiv.classList.toggle('badge-success', !newState);
           pauseDiv.classList.toggle('badge-warning', newState);
         } else {
-          alert(`Failed to toggle ${type} pause state.`);
+          showToast('切换失败', `${humanizeWorkerName(type)} 运行状态更新失败。`, 'error');
         }
       })
       .catch(error => {
         console.error(`Failed to toggle ${type} pause state:`, error);
+        showToast('切换失败', '请求未完成，请检查 API 服务或网络。', 'error');
       });
   }
 
@@ -768,6 +906,7 @@
       return;
     }
     fetchStatePath();
+    fetchGlobalConfigs();
     refreshConfigs('archiver');
     refreshConfigs('monitor');
     fetchPauseState('archiver');
@@ -783,6 +922,8 @@
 
     document.getElementById('statePathSave').addEventListener('click', submitStatePath);
     document.getElementById('statePathRefresh').addEventListener('click', fetchStatePath);
+    document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
+    document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
   });
 </script>
 </body>

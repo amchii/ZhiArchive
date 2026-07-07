@@ -204,6 +204,108 @@ class WorkStatus(str, Enum):
     WAITING = "waiting"  # 正在等待下次运行
 
 
+class GlobalRedisConfigurator:
+    """
+    Redis全局配置
+    """
+
+    def __init__(self, worker: "BaseWorker") -> None:
+        self.worker = worker
+        self.redis = worker.redis
+        self.configs_key = worker.global_configs_key
+        self.logger = self.worker.logger
+
+    @property
+    def config_names(self) -> set[str]:
+        """
+        获取全局配置字段名集合。
+        """
+        return {cfg.name for cfg in self.worker.global_configurable}
+
+    async def get_configs(self) -> dict[str, Any]:
+        """
+        获取全局配置，兼容旧版 worker 独立配置。
+        """
+        configs = self.worker.get_global_configs()
+        if configs_str := await self.redis.get(self.configs_key):
+            configs.update(self._extract_global_configs(json.loads(configs_str)))
+            return configs
+
+        configs.update(await self._get_legacy_configs())
+        return configs
+
+    def _extract_global_configs(self, configs: dict[str, Any]) -> dict[str, Any]:
+        """
+        从配置字典中提取全局字段。
+        """
+        return {
+            key: value
+            for key, value in configs.items()
+            if key in self.config_names and value is not None
+        }
+
+    async def _iter_legacy_config_keys(self) -> AsyncGenerator[str, None]:
+        """
+        遍历旧版 worker 配置 key。
+        """
+        pattern = f"{self.worker.redis_key_prefix}:*:configs"
+        keys = []
+        async for key in self.redis.scan_iter(match=pattern):
+            if isinstance(key, bytes):
+                key = key.decode()
+            if key != self.configs_key:
+                keys.append(key)
+        for key in sorted(keys):
+            yield key
+
+    async def _get_legacy_configs(self) -> dict[str, Any]:
+        """
+        从旧版 worker 独立配置中读取全局字段。
+        """
+        legacy_configs: dict[str, Any] = {}
+        async for configs_key in self._iter_legacy_config_keys():
+            configs_str = await self.redis.get(configs_key)
+            if not configs_str:
+                continue
+            try:
+                configs = json.loads(configs_str)
+            except json.JSONDecodeError:
+                continue
+            legacy_configs.update(self._extract_global_configs(configs))
+        return legacy_configs
+
+    async def _write_configs(self, configs: dict[str, Any]) -> Any:
+        """
+        写入全局配置。
+        """
+        return await self.redis.set(
+            self.configs_key, json.dumps(configs, cls=JSONEncoder)
+        )
+
+    async def write_configs(self, configs: dict[str, Any]) -> None:
+        """
+        写入可编辑的全局配置。
+        """
+        loaded = self.worker.load_global_configs(configs)
+        all_ = await self.get_configs()
+        all_.update(loaded)
+        await self._write_configs(all_)
+
+    async def sync_from_worker(self) -> Any:
+        """
+        将当前 worker 中的全局配置同步到 Redis。
+        """
+        return await self._write_configs(self.worker.get_global_configs())
+
+    async def load_to_worker(self, sync: bool = True) -> None:
+        """
+        将 Redis 全局配置加载到当前 worker。
+        """
+        self.worker.load_global_configs(await self.get_configs())
+        if sync:
+            await self.sync_from_worker()
+
+
 class RedisConfigurator:
     """
     Redis配置
@@ -215,7 +317,7 @@ class RedisConfigurator:
         self.configs_key = worker.configs_key
         self.logger = self.worker.logger
 
-    async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
+    async def _get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
         configs = self.worker.get_configs(filter_)
         if configs_str := await self.redis.get(self.configs_key):
             all_ = json.loads(configs_str)
@@ -224,14 +326,19 @@ class RedisConfigurator:
                     configs[key] = all_[key]
         return configs
 
+    async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
+        await self.worker.global_configurator.load_to_worker(sync=False)
+        return await self._get_configs(filter_)
+
     async def _write_configs(self, configs: dict[str, Any]):
         return await self.redis.set(
             self.configs_key, json.dumps(configs, cls=JSONEncoder)
         )
 
     async def write_writeable_configs(self, configs: dict[str, Any]):
+        await self.worker.global_configurator.load_to_worker(sync=False)
         loaded = self.worker.load_configs(configs)
-        all_ = await self.get_configs()
+        all_ = await self._get_configs()
         all_.update(loaded)
         return await self._write_configs(all_)
 
@@ -239,11 +346,12 @@ class RedisConfigurator:
         await self._write_configs(self.worker.get_configs(ConfigFilter.ALL))
 
     async def load_to_worker(self):
-        configs = await self.get_configs()
+        await self.worker.global_configurator.load_to_worker()
+        configs = await self._get_configs()
         if not configs:
             self.logger.info("No configs found in redis.")
         else:
-            self.worker.load_configs(await self.get_configs())
+            self.worker.load_configs(configs)
         await self.sync_from_worker()
 
 
@@ -251,12 +359,15 @@ class BaseWorker:
     name = "base"
     output_name = ""
     redis_key_prefix = "zhi_archive:archive"
+    global_configs_key = f"{redis_key_prefix}:global:configs"
     state_path_key = f"{redis_key_prefix}:state_path"
     tasks_key = f"{redis_key_prefix}:tasks"  # list
     tasks_result_key = f"{redis_key_prefix}:task_results"  # hash
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
-    configurable: list[Cfg] = [
+    global_configurable: list[Cfg] = [
         Cfg("people"),
+    ]
+    configurable: list[Cfg] = [
         Cfg("page_default_timeout"),
         Cfg("interval"),
         Cfg("person_page_url", read_only=True, depend_on="people"),
@@ -288,6 +399,7 @@ class BaseWorker:
         self.interval = interval
         self.logger = logging.getLogger(self.name or "default")
         self.init_configurable()
+        self.global_configurator = GlobalRedisConfigurator(self)
         self.configurator = RedisConfigurator(self)
 
     def init_configurable(self):
@@ -353,6 +465,26 @@ class BaseWorker:
                 if c._updates:
                     for cfg in c._updates:
                         loaded[cfg.name] = cfg.to_jsonable(cfg.getattr(self))
+        return loaded
+
+    def get_global_configs(self) -> dict[str, Any]:
+        """
+        获取当前 worker 持有的全局配置。
+        """
+        configs = {}
+        for cfg in self.global_configurable:
+            configs[cfg.name] = cfg.to_jsonable(cfg.getattr(self))
+        return configs
+
+    def load_global_configs(self, configs: dict[str, Any]) -> dict[str, Any]:
+        """
+        将全局配置加载到当前 worker。
+        """
+        loaded = {}
+        for cfg in self.global_configurable:
+            if cfg.name in configs:
+                setattr(self, cfg.name, cfg.to_python(configs[cfg.name]))
+                loaded[cfg.name] = cfg.to_jsonable(cfg.getattr(self))
         return loaded
 
     async def push_task(self, task: ArchiveTask):

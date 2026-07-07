@@ -96,6 +96,21 @@ async def pause_status(name: WorkerName):
     return {"pause": await client.need_pause()}
 
 
+@router.get("/configs")
+async def get_global_configs() -> dict[str, Any]:
+    client = get_api_client()
+    return await client.global_configurator.get_configs()
+
+
+@router.put("/configs")
+async def set_global_configs(configs: dict[str, Any]) -> dict[str, Any]:
+    if "people" in configs and not str(configs["people"]).strip():
+        raise HTTPException(status_code=400, detail="people must not be empty")
+    client = get_api_client()
+    await client.global_configurator.write_configs(configs)
+    return await client.global_configurator.get_configs()
+
+
 @router.get("/{name}/configs")
 async def get_configs(
     name: WorkerName, filter: ConfigFilter = ConfigFilter.ALL
