@@ -114,9 +114,9 @@ async def set_configs(name: WorkerName, configs: dict[str, Any]):
 @public_router.get("/config", response_class=HTMLResponse, name="zhi:config_view")
 async def config_view(request: Request):
     return templates.TemplateResponse(
+        request,
         "config.html",
         context={
-            "request": request,
             "zhi_login_url": str(request.url_for("zhi:login_view")),
         },
     )

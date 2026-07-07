@@ -28,9 +28,9 @@ def login_view(request: Request):
         "redirect", str(request.url_for("zhi:config_view"))
     )
     return templates.TemplateResponse(
+        request,
         "login.html",
         context={
-            "request": request,
             "login_url": str(request.url_for("login")),
             "redirect_url": redirect_url,
         },
