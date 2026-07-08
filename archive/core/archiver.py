@@ -37,6 +37,44 @@ class Archiver(BaseWorker):
         headers["Referer"] = self.person_page_url
         await route.continue_(headers=headers)
 
+    async def prepare_page_for_screenshot(self, page: Page) -> None:
+        """
+        清理知乎页面中会干扰长截图拼接的浮动元素。
+        """
+        await page.evaluate(
+            """
+            () => {
+              const hideElement = (element) => {
+                if (!element) {
+                  return;
+                }
+                element.setAttribute("data-zhi-archive-hidden", "true");
+                element.style.setProperty("display", "none", "important");
+              };
+
+              const findFixedAncestor = (element) => {
+                let current = element;
+                while (current && current !== document.body) {
+                  const style = window.getComputedStyle(current);
+                  if (style.position === "fixed") {
+                    return current;
+                  }
+                  current = current.parentElement;
+                }
+                return null;
+              };
+
+              const appHeader = document.querySelector(".AppHeader");
+              hideElement(findFixedAncestor(appHeader));
+
+              document
+                .querySelectorAll(".ContentItem-actions.is-fixed, .CornerButtons")
+                .forEach(hideElement);
+            }
+            """
+        )
+        await page.wait_for_timeout(timeout=200)
+
     async def store_one(self, item: ActivityItem, page: Page):
         target = item["target"]
         meta = item["meta"]
@@ -55,6 +93,7 @@ class Archiver(BaseWorker):
             img_locator = imgs_locator.nth(i)
             await img_locator.scroll_into_view_if_needed()
         await page.wait_for_timeout(timeout=500)
+        await self.prepare_page_for_screenshot(page)
 
         now = datetime.now()
         acted_at = dt_fromisoformat(meta["acted_at"])
