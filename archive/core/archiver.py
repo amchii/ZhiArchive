@@ -1,8 +1,10 @@
 import asyncio
+import html
 import json
+import pathlib
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, TypedDict
 from urllib import parse
 
 import aiofiles
@@ -30,6 +32,204 @@ from archive.utils.js import get_page_scrollHeight, get_page_scrollWidth
 
 ANSWER_PATH_PATTERN = re.compile(r"^/question/\d+/answer/\d+/?$")
 ARTICLE_PATH_PATTERN = re.compile(r"^/p/\d+/?$")
+
+
+class TextArchive(TypedDict):
+    """表示从知乎页面抽取出的文本归档内容。"""
+
+    title: str
+    url: str
+    author: str
+    author_url: str
+    published_at: str
+    updated_at: str
+    target_type: str
+    html: str
+    markdown: str
+
+
+def format_text_archive_html(archive: TextArchive) -> str:
+    """
+    将抽取出的正文包装为可独立阅读的 HTML 文件。
+
+    Args:
+        archive: 从知乎回答或文章页面抽取出的正文和元数据。
+    """
+    title = html.escape(archive["title"])
+    author = html.escape(archive["author"] or "未知作者")
+    source_url = html.escape(archive["url"], quote=True)
+    author_url = html.escape(archive["author_url"], quote=True)
+    published_at = html.escape(archive["published_at"])
+    updated_at = html.escape(archive["updated_at"])
+    target_type = html.escape(archive["target_type"])
+    byline = (
+        f'<a href="{author_url}" rel="noreferrer">{author}</a>'
+        if author_url
+        else author
+    )
+    time_parts = []
+    if published_at:
+        time_parts.append(f"发布于 {published_at}")
+    if updated_at and updated_at != published_at:
+        time_parts.append(f"更新于 {updated_at}")
+    time_text = " · ".join(time_parts)
+    meta_line = f"{target_type} · {byline}"
+    if time_text:
+        meta_line = f"{meta_line} · {time_text}"
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'none'; img-src https: data: file:; style-src 'unsafe-inline';"
+  >
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.72;
+      color: #1f2329;
+      background: #f6f7f9;
+    }}
+    body {{
+      margin: 0;
+      padding: 40px 16px;
+    }}
+    .zhi-archive {{
+      box-sizing: border-box;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 40px 48px;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+    }}
+    .zhi-archive-header {{
+      margin-bottom: 32px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #e5e7eb;
+    }}
+    h1 {{
+      margin: 0 0 12px;
+      font-size: 30px;
+      line-height: 1.32;
+    }}
+    .zhi-archive-meta {{
+      margin: 0;
+      color: #6b7280;
+      font-size: 14px;
+    }}
+    .zhi-archive-source {{
+      margin: 8px 0 0;
+      color: #6b7280;
+      font-size: 14px;
+      word-break: break-all;
+    }}
+    .zhi-archive-content p {{
+      margin: 1em 0;
+    }}
+    .zhi-archive-content a {{
+      color: #175199;
+      text-decoration: none;
+    }}
+    .zhi-archive-content a:hover {{
+      text-decoration: underline;
+    }}
+    .zhi-archive-content img {{
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 12px auto;
+    }}
+    .zhi-archive-content figure {{
+      margin: 24px 0;
+    }}
+    .zhi-archive-content figcaption {{
+      margin-top: 8px;
+      color: #6b7280;
+      font-size: 14px;
+      text-align: center;
+    }}
+    .zhi-archive-content blockquote {{
+      margin: 1em 0;
+      padding-left: 1em;
+      border-left: 4px solid #d0d7de;
+      color: #57606a;
+    }}
+    .zhi-archive-content pre {{
+      overflow: auto;
+      padding: 16px;
+      background: #f6f8fa;
+      border-radius: 6px;
+    }}
+    .zhi-archive-content code {{
+      font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    }}
+    .zhi-archive-content table {{
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1em 0;
+    }}
+    .zhi-archive-content th,
+    .zhi-archive-content td {{
+      border: 1px solid #d0d7de;
+      padding: 6px 10px;
+    }}
+    @media (max-width: 640px) {{
+      body {{
+        padding: 0;
+      }}
+      .zhi-archive {{
+        padding: 24px 18px;
+        border: 0;
+      }}
+      h1 {{
+        font-size: 24px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <article class="zhi-archive">
+    <header class="zhi-archive-header">
+      <h1>{title}</h1>
+      <p class="zhi-archive-meta">{meta_line}</p>
+      <p class="zhi-archive-source">
+        来源：<a href="{source_url}" rel="noreferrer">{source_url}</a>
+      </p>
+    </header>
+    <main class="zhi-archive-content">
+{archive["html"]}
+    </main>
+  </article>
+</body>
+</html>
+"""
+
+
+def format_text_archive_markdown(archive: TextArchive) -> str:
+    """
+    将抽取出的正文包装为 Markdown 文件。
+
+    Args:
+        archive: 从知乎回答或文章页面抽取出的正文和元数据。
+    """
+    lines = [
+        f"# {archive['title']}",
+        "",
+        f"- 类型：{archive['target_type']}",
+        f"- 作者：{archive['author'] or '未知作者'}",
+        f"- 来源：{archive['url']}",
+    ]
+    if archive["published_at"]:
+        lines.append(f"- 发布时间：{archive['published_at']}")
+    if archive["updated_at"] and archive["updated_at"] != archive["published_at"]:
+        lines.append(f"- 更新时间：{archive['updated_at']}")
+    lines.extend(["", "---", "", archive["markdown"].strip(), ""])
+    return "\n".join(lines)
 
 
 def parse_archive_url(url: str) -> tuple[str, TargetType]:
@@ -159,6 +359,350 @@ class Archiver(BaseWorker):
         )
         await page.wait_for_timeout(timeout=200)
 
+    async def extract_text_archive(
+        self,
+        page: Page,
+        target: Target,
+        target_type: TargetType,
+        url: str,
+    ) -> TextArchive:
+        """
+        从当前知乎回答或文章页面抽取 HTML 与 Markdown 正文。
+
+        Args:
+            page: 已打开目标页面的 Playwright 页面。
+            target: 当前归档目标的元数据。
+            target_type: 回答或文章类型。
+            url: 标准化后的目标页面链接。
+        """
+        extracted = await page.evaluate(
+            """
+            ({ targetType, title, url }) => {
+              const asAbsoluteUrl = (value) => {
+                if (!value) {
+                  return "";
+                }
+                try {
+                  return new URL(value, location.href).href;
+                } catch {
+                  return value;
+                }
+              };
+
+              const normalizeZhihuLink = (value) => {
+                const absoluteUrl = asAbsoluteUrl(value);
+                if (!absoluteUrl) {
+                  return "";
+                }
+                try {
+                  const parsed = new URL(absoluteUrl);
+                  if (
+                    parsed.hostname === "link.zhihu.com" &&
+                    parsed.searchParams.has("target")
+                  ) {
+                    return parsed.searchParams.get("target") || absoluteUrl;
+                  }
+                } catch {
+                  return absoluteUrl;
+                }
+                return absoluteUrl;
+              };
+
+              const findRoot = () => {
+                if (targetType === "回答") {
+                  const answerId = location.pathname.match(/answer\\/(\\d+)/)?.[1];
+                  if (answerId) {
+                    const answer = document.querySelector(
+                      `.AnswerItem[name="${answerId}"]`
+                    );
+                    if (answer) {
+                      return answer;
+                    }
+                  }
+                  return (
+                    document.querySelector(".AnswerItem[itemprop='mainEntityOfPage']") ||
+                    document.querySelector(".AnswerItem")
+                  );
+                }
+                return (
+                  document.querySelector("article.Post-Main") ||
+                  document.querySelector(".Post-Main")
+                );
+              };
+
+              const originalRoot = findRoot();
+              if (!originalRoot) {
+                throw new Error("Cannot find Zhihu content root");
+              }
+              const originalRichText =
+                originalRoot.querySelector(".RichText.ztext") || originalRoot;
+              const cloned = originalRichText.cloneNode(true);
+
+              cloned
+                .querySelectorAll(
+                  [
+                    "script",
+                    "style",
+                    "button",
+                    "svg",
+                    ".ContentItem-actions",
+                    ".RichContent-actions",
+                    ".CornerButtons",
+                  ].join(",")
+                )
+                .forEach((element) => element.remove());
+
+              cloned.querySelectorAll("noscript").forEach((element) => {
+                const parent = element.parentElement;
+                if (parent && parent.querySelector("img")) {
+                  element.remove();
+                }
+              });
+
+              cloned.querySelectorAll("*").forEach((element) => {
+                Array.from(element.attributes).forEach((attribute) => {
+                  const name = attribute.name.toLowerCase();
+                  if (
+                    name.startsWith("on") ||
+                    name === "class" ||
+                    name === "style" ||
+                    name.startsWith("data-za") ||
+                    name === "contenteditable"
+                  ) {
+                    element.removeAttribute(attribute.name);
+                  }
+                });
+              });
+
+              cloned.querySelectorAll("a").forEach((link) => {
+                const href = normalizeZhihuLink(link.getAttribute("href"));
+                if (href) {
+                  link.setAttribute("href", href);
+                  link.setAttribute("rel", "noreferrer");
+                } else {
+                  link.removeAttribute("href");
+                }
+                link.removeAttribute("target");
+              });
+
+              cloned.querySelectorAll("img").forEach((image) => {
+                const imageUrl = asAbsoluteUrl(
+                  image.getAttribute("data-original") ||
+                    image.getAttribute("src")
+                );
+                if (imageUrl) {
+                  image.setAttribute("src", imageUrl);
+                }
+                image.removeAttribute("srcset");
+                image.removeAttribute("data-original");
+                image.removeAttribute("loading");
+                if (!image.getAttribute("alt")) {
+                  image.setAttribute("alt", "");
+                }
+              });
+
+              cloned.querySelectorAll("p, li, figcaption").forEach((element) => {
+                element.innerHTML = element.innerHTML.replace(/\\u200b/g, "");
+              });
+
+              const textOf = (node) =>
+                (node?.textContent || "").replace(/\\u200b/g, "").trim();
+
+              const escapeMarkdown = (value) =>
+                value.replace(/([\\\\`*_{}\\[\\]()#+\\-.!|>])/g, "\\\\$1");
+
+              const renderInline = (node) => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  return (node.textContent || "").replace(/\\u200b/g, "");
+                }
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                  return "";
+                }
+                const tagName = node.tagName.toLowerCase();
+                if (tagName === "br") {
+                  return "\\n";
+                }
+                if (tagName === "img") {
+                  const src = node.getAttribute("src") || "";
+                  const alt = escapeMarkdown(node.getAttribute("alt") || "");
+                  return src ? `![${alt}](${src})` : "";
+                }
+                const children = Array.from(node.childNodes)
+                  .map(renderInline)
+                  .join("");
+                if (tagName === "strong" || tagName === "b") {
+                  return children.trim() ? `**${children}**` : "";
+                }
+                if (tagName === "em" || tagName === "i") {
+                  return children.trim() ? `*${children}*` : "";
+                }
+                if (tagName === "code") {
+                  return children.trim() ? `\\`${children}\\`` : "";
+                }
+                if (tagName === "a") {
+                  const href = node.getAttribute("href") || "";
+                  const text = children.trim() || href;
+                  return href ? `[${text}](${href})` : text;
+                }
+                if (tagName === "svg" || tagName === "button") {
+                  return "";
+                }
+                return children;
+              };
+
+              const renderBlock = (node, depth = 0, index = 1) => {
+                if (node.nodeType === Node.TEXT_NODE) {
+                  return (node.textContent || "").trim();
+                }
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                  return "";
+                }
+                const tagName = node.tagName.toLowerCase();
+                if (tagName === "p") {
+                  const content = renderInline(node).trim();
+                  return content ? `${content}\\n\\n` : "";
+                }
+                if (/^h[1-6]$/.test(tagName)) {
+                  const level = Number(tagName.slice(1));
+                  const content = renderInline(node).trim();
+                  return content ? `${"#".repeat(level)} ${content}\\n\\n` : "";
+                }
+                if (tagName === "figure") {
+                  const images = Array.from(node.querySelectorAll("img"))
+                    .map(renderInline)
+                    .filter(Boolean)
+                    .join("\\n");
+                  const caption = textOf(node.querySelector("figcaption"));
+                  const parts = [];
+                  if (images) {
+                    parts.push(images);
+                  }
+                  if (caption) {
+                    parts.push(`*${caption}*`);
+                  }
+                  return parts.length ? `${parts.join("\\n")}\\n\\n` : "";
+                }
+                if (tagName === "blockquote") {
+                  const content = renderChildren(node, depth)
+                    .trim()
+                    .split("\\n")
+                    .map((line) => (line ? `> ${line}` : ">"))
+                    .join("\\n");
+                  return content ? `${content}\\n\\n` : "";
+                }
+                if (tagName === "pre") {
+                  return `\\n\\`\\`\\`\\n${textOf(node)}\\n\\`\\`\\`\\n\\n`;
+                }
+                if (tagName === "ul" || tagName === "ol") {
+                  return (
+                    Array.from(node.children)
+                      .filter((child) => child.tagName.toLowerCase() === "li")
+                      .map((child, childIndex) =>
+                        renderBlock(child, depth + 1, childIndex + 1)
+                      )
+                      .join("") + "\\n"
+                  );
+                }
+                if (tagName === "li") {
+                  const marker =
+                    node.parentElement?.tagName.toLowerCase() === "ol"
+                      ? `${index}.`
+                      : "-";
+                  const indent = "  ".repeat(Math.max(0, depth - 1));
+                  const content = Array.from(node.childNodes)
+                    .map((child) => {
+                      if (
+                        child.nodeType === Node.ELEMENT_NODE &&
+                        ["ul", "ol"].includes(child.tagName.toLowerCase())
+                      ) {
+                        return `\\n${renderBlock(child, depth)}`;
+                      }
+                      return renderInline(child);
+                    })
+                    .join("")
+                    .trim();
+                  return content ? `${indent}${marker} ${content}\\n` : "";
+                }
+                if (tagName === "table") {
+                  return `${node.outerHTML}\\n\\n`;
+                }
+                return renderChildren(node, depth);
+              };
+
+              const renderChildren = (node, depth = 0) =>
+                Array.from(node.childNodes)
+                  .map((child) => renderBlock(child, depth))
+                  .join("");
+
+              const author =
+                originalRoot
+                  .querySelector('meta[itemprop="name"]')
+                  ?.getAttribute("content") || "";
+              const authorLink = normalizeZhihuLink(
+                originalRoot.querySelector("a.UserLink-link")?.getAttribute("href")
+              );
+              const publishedAt =
+                originalRoot
+                  .querySelector(
+                    'meta[itemprop="dateCreated"], meta[itemprop="datePublished"]'
+                  )
+                  ?.getAttribute("content") || "";
+              const updatedAt =
+                originalRoot
+                  .querySelector('meta[itemprop="dateModified"]')
+                  ?.getAttribute("content") || "";
+
+              return {
+                title,
+                url,
+                author,
+                author_url: authorLink,
+                published_at: publishedAt,
+                updated_at: updatedAt,
+                target_type: targetType,
+                html: cloned.innerHTML.trim(),
+                markdown: renderChildren(cloned).replace(/\\n{3,}/g, "\\n\\n").trim(),
+              };
+            }
+            """,
+            {
+                "targetType": target_type.value,
+                "title": target["title"],
+                "url": url,
+            },
+        )
+        archive = TextArchive(**extracted)
+        if not archive["author"]:
+            archive["author"] = target["author"]
+        return archive
+
+    async def save_text_archive(
+        self,
+        target_dir: pathlib.Path,
+        title: str,
+        archive: TextArchive,
+    ) -> dict[str, str]:
+        """
+        将 HTML 与 Markdown 文本归档写入目标目录。
+
+        Args:
+            target_dir: 当前归档对象的保存目录。
+            title: 已清理过的归档文件名前缀。
+            archive: 从页面抽取出的正文和元数据。
+        """
+        html_filename = f"{title}.html"
+        markdown_filename = f"{title}.md"
+        html_path = target_dir.joinpath(html_filename)
+        markdown_path = target_dir.joinpath(markdown_filename)
+        async with aiofiles.open(html_path, "w", encoding="utf-8") as fp:
+            await fp.write(format_text_archive_html(archive))
+        async with aiofiles.open(markdown_path, "w", encoding="utf-8") as fp:
+            await fp.write(format_text_archive_markdown(archive))
+        return {
+            "html": html_filename,
+            "markdown": markdown_filename,
+        }
+
     async def enqueue_url(self, url: str) -> tuple[ArchiveTask, ActivityItem]:
         """
         将一个知乎回答或文章链接加入归档队列。
@@ -279,7 +823,23 @@ class Archiver(BaseWorker):
         )
         # todo: 或许直接通过`ActivityItem.people`来确定保存地址更合理
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
+        target_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = target_dir.joinpath(f"{title}.{self.save_type}")
+        try:
+            text_archive = await self.extract_text_archive(
+                page,
+                target,
+                target_type,
+                url,
+            )
+            text_archive_files = await self.save_text_archive(
+                target_dir,
+                title,
+                text_archive,
+            )
+        except (OSError, PlaywrightError) as error:
+            text_archive_files = {}
+            self.logger.warning(f"Failed to save text archive: {error}")
         page_scroll_height = await page.evaluate(get_page_scrollHeight)
         if 0 < self.screenshot_max_page_scroll_height < page_scroll_height:
             page_scroll_width = await page.evaluate(get_page_scrollWidth)
@@ -303,6 +863,7 @@ class Archiver(BaseWorker):
             "url": url,
             "author": target["author"],
             "shot_at": now,
+            "text_archive": text_archive_files,
         }
         info_path = target_dir.joinpath("info.json")
         async with aiofiles.open(info_path, "w", encoding="utf-8") as fp:
