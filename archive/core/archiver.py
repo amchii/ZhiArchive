@@ -107,6 +107,23 @@ class Archiver(BaseWorker):
         await page.evaluate(
             """
             () => {
+              const styleId = "zhi-archive-screenshot-style";
+              let screenshotStyle = document.getElementById(styleId);
+              if (!screenshotStyle) {
+                screenshotStyle = document.createElement("style");
+                screenshotStyle.id = styleId;
+                (document.head || document.documentElement).appendChild(
+                  screenshotStyle
+                );
+              }
+              screenshotStyle.textContent = `
+                .ContentItem-actions.is-fixed,
+                .RichContent-actions.is-fixed,
+                .CornerButtons {
+                  display: none !important;
+                }
+              `;
+
               const hideElement = (element) => {
                 if (!element) {
                   return;
@@ -131,7 +148,11 @@ class Archiver(BaseWorker):
               hideElement(findFixedAncestor(appHeader));
 
               document
-                .querySelectorAll(".ContentItem-actions.is-fixed, .CornerButtons")
+                .querySelectorAll(
+                  ".ContentItem-actions.is-fixed, " +
+                  ".RichContent-actions.is-fixed, " +
+                  ".CornerButtons"
+                )
                 .forEach(hideElement);
             }
             """

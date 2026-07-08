@@ -98,3 +98,20 @@ async def test_fill_target_metadata_falls_back_to_page_title() -> None:
 
     assert target["title"] == "问题标题"
     assert target["author"] == ""
+
+
+@pytest.mark.asyncio
+async def test_prepare_page_injects_persistent_floating_action_style() -> None:
+    """验证截图期间新出现的浮动操作栏也会被持续隐藏。"""
+    page = MagicMock()
+    page.evaluate = AsyncMock()
+    page.wait_for_timeout = AsyncMock()
+    archiver = Archiver.__new__(Archiver)
+
+    await archiver.prepare_page_for_screenshot(page)
+
+    script = page.evaluate.await_args.args[0]
+    assert 'styleId = "zhi-archive-screenshot-style"' in script
+    assert ".ContentItem-actions.is-fixed" in script
+    assert ".RichContent-actions.is-fixed" in script
+    page.wait_for_timeout.assert_awaited_once_with(timeout=200)
