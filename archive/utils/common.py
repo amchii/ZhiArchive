@@ -24,17 +24,27 @@ def dt_toisoformat(dt: datetime) -> str:
     return dt.isoformat()
 
 
-def get_validate_filename(filename: str, safe_cn_length=50) -> str:
+def get_validate_filename(
+    filename: str,
+    safe_cn_length: int = 50,
+    reserved_suffix: str = "",
+) -> str:
     """
-    知乎的文章标题最多100个汉字
-    sanitize_filename方法不能正确处理汉字（255个汉字依然超出默认长度：255bytes）
+    清理文件名，并在名称过长时保留指定后缀。
+
+    Args:
+        filename: 待处理的文件名。
+        safe_cn_length: 名称过长时保留的前缀字符数。
+        reserved_suffix: 截断时必须保留的短 ID、扩展名等后缀。
     """
-    filename = sanitize_filename(filename, replacement_text="_")
+    filename = sanitize_filename(filename, replacement_text="_", max_len=None)
     try:
         validate_filename(filename)
     except ValidationError as e:
         if e.reason == ErrorReason.INVALID_LENGTH:
-            return filename[:safe_cn_length]
+            if reserved_suffix and filename.endswith(reserved_suffix):
+                filename = filename[: -len(reserved_suffix)]
+            return f"{filename[:safe_cn_length]}{reserved_suffix}"
     return filename
 
 

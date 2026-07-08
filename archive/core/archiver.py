@@ -97,8 +97,10 @@ class Archiver(BaseWorker):
 
         now = datetime.now()
         acted_at = dt_fromisoformat(meta["acted_at"])
+        title_suffix = f"-{item['id'][:8]}"
         title = get_validate_filename(
-            f"{item['meta']['action']}-{item['target']['title']}-{item['id'][:8]}"
+            f"{item['meta']['action']}-{item['target']['title']}{title_suffix}",
+            reserved_suffix=title_suffix,
         )
         # todo: 或许直接通过`ActivityItem.people`来确定保存地址更合理
         target_dir = self.get_date_dir(acted_at.date()).joinpath(title)

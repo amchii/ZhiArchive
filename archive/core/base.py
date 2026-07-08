@@ -69,7 +69,17 @@ class ActivityItem(TypedDict):
     people: str | None  # 小明赞同了小红的回答，此处指小明
 
 
-def get_correct_target_type(action_text, target_type_text) -> TargetType | None:
+def get_correct_target_type(
+    action_text: str,
+    target_type_text: str,
+) -> TargetType | None:
+    """
+    将知乎动态的动作文本映射为项目关心的目标类型。
+
+    Args:
+        action_text: 动态动作文本，例如“赞同”。
+        target_type_text: 动态目标类型文本，例如“回答”。
+    """
     try:
         action = Action(action_text)
         if action in (Action.AGREE, Action.COLLECT):
@@ -78,6 +88,8 @@ def get_correct_target_type(action_text, target_type_text) -> TargetType | None:
             return TargetType.ANSWER
         elif action == Action.POST_ARTICLE and target_type_text == TargetType.ARTICLE:
             return TargetType.ARTICLE
+        elif action == Action.POST_PIN and target_type_text == TargetType.PIN:
+            return TargetType.PIN
         return
     except ValueError:
         return
