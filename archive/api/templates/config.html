@@ -98,6 +98,22 @@
             align-items: start;
         }
 
+        .manual-archive-form {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: end;
+            gap: 12px;
+        }
+
+        .manual-archive-form .field {
+            min-width: 0;
+        }
+
+        .manual-archive-form button {
+            min-height: 44px;
+            white-space: nowrap;
+        }
+
         @media (max-width: 1120px) {
             .summary-grid,
             .worker-grid {
@@ -115,6 +131,14 @@
             .summary-grid,
             .worker-grid {
                 grid-template-columns: 1fr;
+            }
+
+            .manual-archive-form {
+                grid-template-columns: 1fr;
+            }
+
+            .manual-archive-form button {
+                width: 100%;
             }
         }
 
@@ -458,6 +482,24 @@
         </div>
     </div>
 
+    <section class="card">
+        <div class="card-header">
+            <div>
+                <p class="eyebrow">Archiver</p>
+                <h2>手动归档</h2>
+            </div>
+            <div class="pill">回答 / 文章</div>
+        </div>
+        <form id="manualArchiveForm" class="manual-archive-form">
+            <div class="field">
+                <label for="manualArchiveUrl">知乎链接</label>
+                <input type="text" id="manualArchiveUrl" inputmode="url"
+                       placeholder="https://www.zhihu.com/question/.../answer/..." required>
+            </div>
+            <button class="primary" id="manualArchiveSubmit" type="submit">加入归档队列</button>
+        </form>
+    </section>
+
     <div class="worker-grid">
         <div class="card">
             <div class="card-header">
@@ -631,6 +673,42 @@
         console.error('Failed to update global config:', error);
         showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
       });
+  }
+
+  async function submitManualArchive(event) {
+    event.preventDefault();
+    const input = document.getElementById('manualArchiveUrl');
+    const button = document.getElementById('manualArchiveSubmit');
+    const url = input.value.trim();
+    if (!url) {
+      showToast('提交失败', '请输入知乎回答或文章链接。', 'error');
+      input.focus();
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = '正在加入...';
+    try {
+      const response = await fetch('/zhi/core/archiver/tasks', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: url})
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '归档任务提交失败。');
+      }
+      input.value = '';
+      showToast(
+        '已加入归档队列',
+        `${data.target_type}将在 Archiver 运行时保存。`
+      );
+    } catch (error) {
+      showToast('提交失败', error.message || '请求未完成，请检查 API 服务。', 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = '加入归档队列';
+    }
   }
 
   function fetchConfig(endpoint, filter, elementId) {
@@ -948,6 +1026,7 @@
     document.getElementById('statePathRefresh').addEventListener('click', fetchStatePath);
     document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
     document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
+    document.getElementById('manualArchiveForm').addEventListener('submit', submitManualArchive);
   });
 </script>
 </body>

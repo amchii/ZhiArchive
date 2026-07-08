@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from datetime import datetime
 from typing import Literal
 from urllib import parse
@@ -9,10 +10,72 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Route
 
 from archive.config import settings
-from archive.core.base import ActivityItem, BaseWorker, Cfg, TargetType
-from archive.utils.common import dt_fromisoformat, get_validate_filename
+from archive.core.base import (
+    ActivityItem,
+    ActivityMeta,
+    ArchiveTask,
+    BaseWorker,
+    Cfg,
+    Target,
+    TargetType,
+)
+from archive.utils.common import (
+    dt_fromisoformat,
+    dt_str,
+    get_validate_filename,
+    uuid_hex,
+)
 from archive.utils.encoder import JSONEncoder
 from archive.utils.js import get_page_scrollHeight, get_page_scrollWidth
+
+ANSWER_PATH_PATTERN = re.compile(r"^/question/\d+/answer/\d+/?$")
+ARTICLE_PATH_PATTERN = re.compile(r"^/p/\d+/?$")
+
+
+def parse_archive_url(url: str) -> tuple[str, TargetType]:
+    """
+    校验并标准化可由 archiver 保存的知乎链接。
+
+    Args:
+        url: 知乎回答或专栏文章链接。
+
+    Returns:
+        标准化后的 HTTPS 链接及目标类型。
+
+    Raises:
+        ValueError: 链接不是受支持的知乎回答或专栏文章。
+    """
+    value = url.strip()
+    if value.startswith("//"):
+        value = f"https:{value}"
+    elif value.startswith("/question/"):
+        value = f"https://www.zhihu.com{value}"
+
+    parsed = parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"}:
+        raise ValueError("请输入完整的知乎回答或文章链接")
+    if parsed.username or parsed.password:
+        raise ValueError("链接中不能包含用户认证信息")
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("链接端口格式不正确") from error
+    if port not in {None, 80, 443}:
+        raise ValueError("链接不能包含自定义端口")
+
+    host = (parsed.hostname or "").lower()
+    path = parsed.path.rstrip("/") or "/"
+    if host in {"zhihu.com", "www.zhihu.com"} and ANSWER_PATH_PATTERN.fullmatch(
+        parsed.path
+    ):
+        target_type = TargetType.ANSWER
+        host = "www.zhihu.com"
+    elif host == "zhuanlan.zhihu.com" and ARTICLE_PATH_PATTERN.fullmatch(parsed.path):
+        target_type = TargetType.ARTICLE
+    else:
+        raise ValueError("仅支持知乎回答或专栏文章链接")
+
+    return parse.urlunparse(("https", host, path, "", "", "")), target_type
 
 
 class Archiver(BaseWorker):
@@ -75,17 +138,108 @@ class Archiver(BaseWorker):
         )
         await page.wait_for_timeout(timeout=200)
 
-    async def store_one(self, item: ActivityItem, page: Page):
+    async def enqueue_url(self, url: str) -> tuple[ArchiveTask, ActivityItem]:
+        """
+        将一个知乎回答或文章链接加入归档队列。
+
+        Args:
+            url: 知乎回答或专栏文章链接。
+
+        Returns:
+            已推送的任务及其动态数据。
+        """
+        normalized_url, target_type = parse_archive_url(url)
+        await self.global_configurator.load_to_worker(sync=False)
+        now = datetime.now()
+        item_id = uuid_hex()
+        item = ActivityItem(
+            id=item_id,
+            target=Target(
+                title="",
+                link=normalized_url,
+                author="",
+                fetched_at=now,
+            ),
+            meta=ActivityMeta(
+                action="手动归档",
+                target_type=target_type,
+                acted_at=now,
+                raw=[normalized_url],
+            ),
+            people=self.people,
+        )
+        filepath = self.tasks_dir.joinpath(f"manual-{dt_str(now)}-{item_id[:8]}.json")
+        async with aiofiles.open(filepath, "w", encoding="utf-8") as fp:
+            await fp.write(
+                json.dumps([item], ensure_ascii=False, indent=2, cls=JSONEncoder)
+            )
+        task = ArchiveTask(filepath)
+        await self.push_task(task)
+        self.logger.info(f"Push a manual archive task {task} to task list")
+        return task, item
+
+    async def fill_target_metadata(
+        self,
+        page: Page,
+        target: Target,
+        target_type: TargetType,
+    ) -> None:
+        """
+        为手动归档任务补全页面标题和作者。
+
+        Args:
+            page: 已打开目标页面的 Playwright 页面。
+            target: 待补全的目标数据。
+            target_type: 回答或文章类型。
+        """
+        if not target["title"]:
+            try:
+                title = await page.locator('meta[property="og:title"]').get_attribute(
+                    "content", timeout=1000
+                )
+            except PlaywrightError:
+                title = ""
+            if not title:
+                title = await page.title()
+            target["title"] = title.removesuffix(" - 知乎").strip()
+
+        if target["author"]:
+            return
+        if target_type == TargetType.ANSWER:
+            author_selector = "div.AnswerCard a.UserLink-link"
+        else:
+            author_selector = (
+                "div.Post-Author a.UserLink-link, div.AuthorInfo a.UserLink-link"
+            )
+        try:
+            author_href = await page.locator(author_selector).first.get_attribute(
+                "href", timeout=1000
+            )
+        except PlaywrightError:
+            author_href = ""
+        if author_href:
+            target["author"] = author_href.rstrip("/").rsplit("/", maxsplit=1)[-1]
+
+    async def store_one(self, item: ActivityItem, page: Page) -> Page | None:
+        """
+        打开并保存一个回答或文章归档。
+
+        Args:
+            item: 待归档的动态数据。
+            page: 用于访问目标链接的 Playwright 页面。
+        """
         target = item["target"]
         meta = item["meta"]
         if not target["link"]:
             return
-        r = parse.urlparse(target["link"])
-        url = "https://" + "".join(r[1:])
+        url, target_type = parse_archive_url(target["link"])
         await page.route(url, self.referrer_route)
         await self.goto(page, url)
+        await self.fill_target_metadata(page, target, target_type)
+        if not target["title"]:
+            target["title"] = f"{target_type.value}-{item['id'][:8]}"
         # 确保页面中的图片被加载
-        if meta["target_type"] == TargetType.ANSWER:
+        if target_type == TargetType.ANSWER:
             imgs_locator = page.locator("div.AnswerCard figure img")
         else:
             imgs_locator = page.locator("div.Post-RichTextContainer figure img")

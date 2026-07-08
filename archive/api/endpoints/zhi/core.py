@@ -2,17 +2,18 @@ import json
 import os
 import pathlib
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 from archive.api.render import templates
 from archive.api.security import verify_user_from_cookie
 from archive.core.api_client import get_api_client
-from archive.core.base import BaseWorker, ConfigFilter
+from archive.core.archiver import Archiver
+from archive.core.base import BaseWorker, ConfigFilter, TargetType
 
 from .login import get_qrcode_task
 
@@ -39,6 +40,19 @@ class StatePath(BaseModel):
 class TestStateResult(BaseModel):
     test_url: str
     ok: bool
+
+
+class ArchiveURLRequest(BaseModel):
+    url: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=2048),
+    ]
+
+
+class ArchiveTaskResult(BaseModel):
+    task_id: str
+    url: str
+    target_type: TargetType
 
 
 @router.get("/state_path", response_model=StatePath)
@@ -124,6 +138,26 @@ async def set_configs(name: WorkerName, configs: dict[str, Any]):
     client = get_api_client(name)
     await client.configurator.write_writeable_configs(configs)
     return await client.configurator.get_configs(ConfigFilter.WRITABLE)
+
+
+@router.post("/archiver/tasks", response_model=ArchiveTaskResult)
+async def enqueue_archive_task(payload: ArchiveURLRequest) -> dict[str, Any]:
+    """
+    将知乎回答或文章链接加入 archiver 队列。
+
+    Args:
+        payload: 包含待归档链接的请求数据。
+    """
+    client = get_api_client(Archiver.name)
+    try:
+        _task, item = await client.enqueue_url(payload.url)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return {
+        "task_id": item["id"],
+        "url": item["target"]["link"],
+        "target_type": item["meta"]["target_type"],
+    }
 
 
 @public_router.get("/config", response_class=HTMLResponse, name="zhi:config_view")
