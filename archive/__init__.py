@@ -1,3 +1,3 @@
 import archive.logger  # noqa: F401
 
-__version__ = "25.12.0"
+__version__ = "26.7.0"

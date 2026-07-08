@@ -1,6 +1,6 @@
 [project]
 name = "zhi-archive"
-version = "25.12.0"
+version = "26.7.0"
 description = "Collecting and storing dynamic content from your Zhihu account for never lose."
 authors = [
     { name = "amchii", email = "finethankuandyou@gmail.com" }

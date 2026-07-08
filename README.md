@@ -1,90 +1,87 @@
 # ZhiArchive
 
-**监测知乎用户的个人动态并保存内容至本地。**
+监测知乎用户动态，并将相关回答、文章和想法保存到本地。
 
-某用户的动态结果保存目录如下：
-`activities`为个人动态页快照，`archives`为动态对应的回答/文章快照
+当前版本：`26.7.0`
 
-```
-.
+ZhiArchive 基于 Playwright、FastAPI 和 Redis 工作，适合长期运行在本机或服务器上，用于保存指定知乎用户的公开动态和动态关联内容。
+
+## 功能
+
+- 监测指定知乎用户的动态页。
+- 保存动态卡片截图和动态 JSON 快照。
+- 对动态中的回答和文章触发归档，保存长截图、元信息、HTML 和 Markdown。
+- 对赞同或发布的想法保存动态截图。
+- 支持在控制台手动提交回答或文章链接，主动触发归档。
+- 提供 Web 控制台管理登录状态、Cookie 路径、目标用户、运行状态和 worker 配置。
+- 支持 Docker 部署，也支持本地 `uv` 环境运行。
+
+## 输出结构
+
+某个用户的归档结果大致如下：
+
+```text
+results/<people>/
 ├── activities
-│   ├── 2024
-│   │   └── 01
-│   │       └── 17
-│   │           ├── 回答-为什么只有饿死的狮子而没有饿死的老虎？说明了什么问题？.png
-│   │           ...
-│   │           └── 赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png
-│   └── 20240117181850.json
-└── archives
-    └── 2024
-        └── 01
-            └── 17
-                ├── 回答-为什么只有饿死的狮子而没有饿死的老虎？说明了什么问题？
-                │   ├── info.json
-                │   └── 回答-为什么只有饿死的狮子而没有饿死的老虎？说明了什么问题？.png
-                ...
-                └── 赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？
-                    ├── info.json
-                    └── 赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png
-
-16 directories, 25 files
+│   ├── 2026
+│   │   └── 07
+│   │       └── 09
+│   │           └── 赞同-某条动态-12345678.jpeg
+│   └── 20260709120000.json
+├── archives
+│   └── 2026
+│       └── 07
+│           └── 09
+│               └── 赞同-某篇回答-12345678
+│                   ├── info.json
+│                   ├── 赞同-某篇回答-12345678.jpeg
+│                   ├── 赞同-某篇回答-12345678.html
+│                   └── 赞同-某篇回答-12345678.md
+└── tasks
+    └── manual-20260709120000-12345678.json
 ```
 
-其中：
-**动态**文件`activities/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Dynamic screenshot](./docs/static/dynamic_screenshot.png)
+`info.json` 示例：
 
-
-
-**目标**文件`archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？.png`如图：
-![Content screenshot](./docs/static/content_screenshot.png)
-
-
-`archives/2024/01/17/赞同-如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？/info.json`内容为：
-
-```
+```json
 {
-  "title": "如何看待211高校华中某业大学动物Y养系黄某若教授十几年如一日的学术造假行为？",
-  "url": "https://zhuanlan.zhihu.com/p/678136207",
-  "author": "zhang-li-28-1",
-  "shot_at": "2024-01-17T18:19:13.783"
+  "title": "某篇回答标题",
+  "url": "https://www.zhihu.com/question/1/answer/2",
+  "author": "author-id",
+  "shot_at": "2026-07-09T12:00:00.000000",
+  "text_archive": {
+    "html": "赞同-某篇回答-12345678.html",
+    "markdown": "赞同-某篇回答-12345678.md"
+  }
 }
 ```
 
-## 目录
-- [简介](#1-简介)
-- [使用](#2-使用)
-  - [本地运行](#本地运行)
-  - [Docker](#docker)
-    - [下载本项目](#下载本项目)
-    - [构建镜像](#构建镜像)
-    - [配置环境变量](#配置环境变量)
-    - [启动](#启动)
-    - [初始化](#初始化)
-  - [运行Monitor和Archiver](#运行monitor和archiver)
-- [已知问题](#已知问题)
-- [TODO](#todo)
+说明：
 
----
+- `activities` 保存动态页卡片截图和本次监测到的动态 JSON。
+- `archives` 保存回答或文章归档。
+- `tasks` 保存待 archiver 消费的任务文件。
+- HTML 是更接近知乎正文排版的文本归档，Markdown 便于搜索、阅读和二次处理。
 
-# 1. 简介
+动态卡片截图示例：
 
-`ZhiArchive`使用[Playwright](https://github.com/microsoft/playwright)，它由4个部分组成，分别是monitor，archiver，login worker和api：
+<p>
+  <img src="./docs/static/dynamic_screenshot.png" alt="动态截图" width="720">
+</p>
 
-- **monitor**：用于监测用户个人主页的动态并将新的动态：打快照，把动态的目标（回答、文章）链接通过redis传递给**archiver**。
-- **archiver**：打开目标链接并保存屏幕快照至本地。
-- **login worker**：用于登录知乎获取**monitor**和**archiver**所必需的认证信息。
-- **api**：提供接口来操作控制**monitor**，**archiver**，**login worker**。
+回答/文章截图示例：
 
-# 2. 使用
+<p>
+  <img src="./docs/static/content_screenshot.png" alt="内容截图" width="720">
+</p>
 
-*注意查看日志跟踪运行状态*
+## 模块
 
-*archiver: archiver.log*
-
-*monitor: monitor.log*
-
-*login_worker: login_worker.log*
+- `login worker`：获取知乎登录二维码，并保存 Playwright storage state。
+- `monitor`：监测目标用户动态，保存动态截图，并将回答/文章任务推给 archiver。
+- `archiver`：打开回答或文章页面，保存截图、HTML、Markdown 和元信息。
+- `api`：提供 Web 控制台和配置接口。
+- `redis`：保存 worker 状态、配置和归档任务队列。
 
 ## 本地运行
 
@@ -98,13 +95,19 @@ uv pip install --group dev
 playwright install chromium
 ```
 
+如需使用国内 PyPI 镜像，可在安装前设置：
+
+```sh
+export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple/
+```
+
 运行 API：
 
 ```sh
 bash run_api.sh
 ```
 
-或直接运行 worker：
+或分别运行 worker：
 
 ```sh
 python run_login_worker.py
@@ -116,14 +119,8 @@ python run_all_workers_in_one.py
 代码检查和测试：
 
 ```sh
-ruff check archive
+ruff check archive tests
 pytest
-```
-
-如需使用国内 PyPI 镜像，可在安装前设置 `UV_DEFAULT_INDEX`，例如：
-
-```sh
-export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple/
 ```
 
 更新运行依赖导出文件：
@@ -134,114 +131,121 @@ uv pip compile pyproject.toml -o requirements.txt
 
 ## Docker
 
-### 下载本项目
+下载项目：
 
 ```sh
-# 下载本项目
 git clone https://github.com/amchii/ZhiArchive.git
-# 进入项目目录
 cd ZhiArchive
 ```
 
-### 构建镜像
+构建国内源镜像：
 
 ```sh
 docker build -t zhi-archive:latest -f CN.Dockerfile .
 ```
 
-### 配置环境变量
+每个 worker 单独运行：
 
-现在支持 **0配置** 启动，你若是只想在本机 **试用本项目，可以忽略这一步**。
-
-但是当部署在云服务器上并暴露API端口时，**强烈建议**配置`.apienv`启用接口认证。
-
-所有可配置项见[config.py](./archive/config.py)：
-
-支持通过环境变量或`.env`，`.apienv`文件配置
-
-`.env`文件
-
-```
-secret_key=  # 请生成一个随机字符串
-```
-
-`.apienv`文件
-
-```
-# API认证账号，配置用户名和密码
-enable_auth=true
-username=
-password=
-```
-
-### 启动
-
-#### 警告⚠️
-若当前是root用户，则会导致容器内的chromium浏览器无法以沙盒模式启动：[https://playwright.dev/python/docs/docker#run-the-image](https://playwright.dev/python/docs/docker#run-the-image)，可能会被知乎执行恶意代码（🤨。
-
-#### 常规方式 - 每个worker单独的容器
-
-*docker 新版本可以直接使用`docker compose`而不是`docker-compose`*
-
-```
+```sh
 docker compose up -d
 ```
 
-这会为每个worker启用一个容器，同时运行一个redis实例。
+多个 worker 在一个容器中运行，并单独部署 Redis：
 
-#### All workers in one - 多个worker在一个容器中运行+单独部署Redis
-
-需要通过环境变量或`.env`文件配置redis，如：
-
+```sh
+docker compose -f docker-compose2.yaml up -d
 ```
+
+如果单独部署 Redis，可通过环境变量或 `.env` 配置：
+
+```env
 redis_host=172.17.0.1
 redis_port=6379
 redis_passwd=apassword
 ```
 
-启动服务：
+注意：容器内 Chromium 在 root 用户下无法以沙盒模式启动。公网部署时应限制容器权限和内存，并参考 Playwright Docker 安全建议。
 
+## 初始化
+
+默认 API 端口是 `9090`。以本机为例，打开：
+
+```text
+http://127.0.0.1:9090/zhi/core/config
 ```
-docker compose -f docker-compose2.yaml up -d
+
+首次使用建议按以下步骤操作：
+
+1. 确认 `login worker` 已启动。
+2. 在控制台点击“去登录知乎”，进入登录页。
+3. 点击获取二维码按钮，使用知乎 App 扫码登录。
+4. 登录成功后返回配置页。
+5. 在“目标用户”中填写知乎用户 ID。
+6. 确认 Cookie state 路径。
+7. 配置 monitor 和 archiver 参数。
+8. 在“运行状态”中切换 worker 状态。
+
+如果已有可用的 Playwright storage state 文件，也可以直接在配置页设置 state 文件路径，不必重新扫码。
+
+登录二维码页面示例：
+
+<p>
+  <img src="./docs/static/qrcode_login.jpg" alt="二维码登录" width="560">
+</p>
+
+配置控制台示例：
+
+<p>
+  <img src="./docs/static/config.jpg" alt="配置页" width="900">
+</p>
+
+## 配置
+
+配置来源包括环境变量、`.env`、`.apienv` 和 Redis 中的运行时配置。常见配置项见 [archive/config.py](./archive/config.py)。
+
+公网暴露 API 时，建议启用 `.apienv` 鉴权：
+
+```env
+enable_auth=true
+username=
+password=
 ```
 
-API端口为9090，以127.0.0.1为例，
+控制台中的目标用户是全局配置，会同时影响 monitor 和 archiver。monitor 和 archiver 的可编辑配置只保存 worker 专属参数。
 
-### 初始化
+## 手动归档
 
-#### 1. 登录知乎获取Cookie
+控制台支持直接提交知乎回答或专栏文章链接，例如：
 
-   打开[http://127.0.0.1:9090/zhi/login](http://127.0.0.1:9090/zhi/login)获取知乎登录二维码：
-   ![qrcode login](./docs/static/qrcode_login.jpg)
+```text
+https://www.zhihu.com/question/2058247449894970042/answer/2058308278786987158
+https://zhuanlan.zhihu.com/p/2055288243885709032
+```
 
-   扫码完成登录后将**自动应用**获取的Cookie并重定向到配置页面http://127.0.0.1:9090/zhi/core/config 。
+提交后会写入现有任务队列，由 archiver 按普通归档流程处理。
 
-#### 2. 配置页
+## 文本归档
 
-   `states/d2b7f9613e2c0da587ee.state.json`即保存的cookies文件，上一步登录成功后自动设置，所以如果你有该文件，也可以不登录直接设置为你的文件路径。
+回答和文章归档时会同时保存：
 
-   ![配置页](./docs/static/config.jpg)
+- 截图：`jpeg` 或 `png`
+- HTML：更接近知乎正文排版
+- Markdown：便于检索和二次处理
+- 元信息：`info.json`
 
-   Monitor默认每5分钟监测一次，配置项含义见[config.py](./archive/config.py)。
+HTML 和 Markdown 是截图之外的附加产物。文本归档失败不会中断截图保存。
 
-### 运行Monitor和Archiver
+## 已知问题
 
-Monitor和Archiver默认是暂停状态，通过配置页的`归档Archiver配置`和`监控Monitor配置` 更改`people`为你想要监控的知乎用户名，通过下方的`切换状态`按钮可以控制运行状态，注意观察日志文件的输出。
+- Chromium 截图占用内存较高，低内存服务器可能出现浏览器崩溃。
+- 超长回答或文章仍可能触发 Playwright 截图失败。
+- 知乎页面结构变化可能导致选择器失效，需要随页面更新适配。
+- HTML/Markdown 文本归档更适合正文保存，不保证完整还原所有知乎交互组件。
 
-# 已知问题
+## 变更记录
 
-1. 即使是无头模式，Chromium浏览网页和截图时占用内存依然较高，在低内存的云服务器上可能会崩溃（需要数百MB，最好通过docker的`--memory`限制下，参考`docker-compose2.yaml`）
-2. 超长的回答/文章可能会截图失败（playwright抛出错误），经测试内存越大能截的图越长
+详见 [CHANGELOG.md](./CHANGELOG.md)。
 
+## 许可证
 
-# TODO
-
-- 所有元素selector可配置
-- 通过接口完全控制`Monitor`, `Archiver`
-- 支持监测多个用户
-- 异常告警
-- 提供前端界面
-- 存档任务失败处理
-
-
-# 欢迎交流，Star⭐️一下，随时更新
+本项目使用 MIT License。
