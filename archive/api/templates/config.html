@@ -415,6 +415,9 @@
         </div>
         <div class="header-actions">
             <div class="pill">实时 API 更新</div>
+            <button class="ghost" type="button"
+                    onclick="window.location.href='{{ results_url | default('/zhi/results') }}'">查看归档
+            </button>
             <button class="primary" type="button"
                     onclick="window.location.href='{{ zhi_login_url | default('/zhi/login') }}'">去登录知乎
             </button>

@@ -167,5 +167,6 @@ async def config_view(request: Request):
         "config.html",
         context={
             "zhi_login_url": str(request.url_for("zhi:login_view")),
+            "results_url": str(request.url_for("zhi:results_view")),
         },
     )

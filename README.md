@@ -14,6 +14,7 @@ ZhiArchive 基于 Playwright、FastAPI 和 Redis 工作，适合长期运行在�
 - 对赞同或发布的想法保存动态截图。
 - 支持在控制台手动提交回答或文章链接，主动触发归档。
 - 提供 Web 控制台管理登录状态、Cookie 路径、目标用户、运行状态和 worker 配置。
+- 提供只读结果浏览器，在线查看动态截图、JSON、HTML 和 Markdown 归档。
 - 支持 Docker 部署，也支持本地 `uv` 环境运行。
 
 ## 输出结构
@@ -62,6 +63,23 @@ results/<people>/
 - `archives` 保存回答或文章归档。
 - `tasks` 保存待 archiver 消费的任务文件。
 - HTML 是更接近知乎正文排版的文本归档，Markdown 便于搜索、阅读和二次处理。
+
+## 结果浏览器
+
+API 服务启动后访问：
+
+```text
+http://127.0.0.1:9090/zhi/results
+```
+
+结果浏览器会列出 `results/<people>/activities` 和
+`results/<people>/archives`，支持图片、JSON、Markdown、HTML 和纯文本预览，
+也可以下载原始文件。任务队列目录 `tasks` 不会显示，页面不提供删除、重命名或上传操作。
+
+文本文件的在线预览上限为 1 MiB，超过限制时请直接下载。HTML 归档通过浏览器沙箱和
+Content Security Policy 加载，避免归档内容访问控制台页面。
+
+结果文件可能包含个人归档数据。将 API 暴露到公网前，请在 `.apienv` 中开启鉴权。
 
 动态卡片截图示例：
 
@@ -209,7 +227,12 @@ http://127.0.0.1:9090/zhi/core/config
 enable_auth=true
 username=
 password=
+# 仅当前端与 API 不同源时配置；多个 Origin 使用英文逗号分隔
+cors_allowed_origins=https://console.example.com,http://127.0.0.1:3000
 ```
+
+`cors_allowed_origins` 默认为空，此时 API 只支持同源访问。配置值必须是明确的
+HTTP(S) Origin，不能使用 `*`，也不能包含路径、查询参数或账号凭据。
 
 控制台中的目标用户是全局配置，会同时影响 monitor 和 archiver。monitor 和 archiver 的可编辑配置只保存 worker 专属参数。
 

@@ -1,6 +1,7 @@
 import pathlib
 from enum import Enum
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from pydantic import StringConstraints
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -71,6 +72,36 @@ class APISettings(BaseSettings):
     username: str = "admin"
     password: str = "admin123456"
     cookies_max_age: int = 60 * 60 * 24 * 30
+    # 允许携带 Cookie 访问 API 的跨域来源，多个来源使用英文逗号分隔
+    cors_allowed_origins: str = ""
+
+    @property
+    def cors_origins(self) -> list[str]:
+        """解析并校验允许访问 API 的跨域来源列表。"""
+        origins: list[str] = []
+        for value in self.cors_allowed_origins.split(","):
+            origin = value.strip()
+            if not origin:
+                continue
+            if origin == "*":
+                raise ValueError("cors_allowed_origins 不允许使用通配符 *")
+            parsed = urlsplit(origin)
+            if (
+                parsed.scheme.lower() not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError(
+                    "cors_allowed_origins 必须是完整的 HTTP(S) Origin，不能包含路径"
+                )
+            normalized_origin = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+            if normalized_origin not in origins:
+                origins.append(normalized_origin)
+        return origins
 
 
 settings = Settings()
