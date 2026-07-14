@@ -21,9 +21,9 @@ dependencies = [
     "PyJWT",
     "jinja2",
     "aiofiles",
-    "redis",
     "pathvalidate",
     "playwright_stealth>=2.0.0",
+    "aiosqlite"
 ]
 
 [dependency-groups]

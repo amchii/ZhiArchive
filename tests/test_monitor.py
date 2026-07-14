@@ -110,3 +110,27 @@ def test_filter_archivable_items_excludes_pin() -> None:
     monitor = Monitor.__new__(Monitor)
 
     assert monitor.filter_archivable_items([pin_item, answer_item]) == [answer_item]
+
+
+@pytest.mark.asyncio
+async def test_save_and_push_updates_checkpoint_for_empty_items() -> None:
+    """验证没有可保存动态时仍会推进 monitor checkpoint。"""
+    now = datetime.now()
+    monitor = Monitor.__new__(Monitor)
+    monitor.people = "someone"
+    monitor.fetch_until = now
+    monitor.latest_dt = now
+    monitor.logger = MagicMock()
+    monitor.sqlite_store = MagicMock()
+    monitor.sqlite_store.enqueue_monitor_items_and_checkpoint = AsyncMock(
+        return_value=0
+    )
+
+    await monitor.save_and_push([])
+
+    monitor.sqlite_store.enqueue_monitor_items_and_checkpoint.assert_awaited_once_with(
+        "someone",
+        [],
+        now,
+        now,
+    )

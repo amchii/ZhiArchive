@@ -12,17 +12,16 @@ from archive.config import default, settings
 from archive.core.base import (
     ActivityItem,
     ActivityMeta,
-    ArchiveTask,
     BaseWorker,
     Cfg,
     Target,
     TargetType,
     get_correct_target_type,
 )
+from archive.storage import SQLiteStore
 from archive.utils.common import (
     dt_fromisoformat,
     dt_str,
-    dt_toisoformat,
     get_validate_filename,
     uuid_hex,
 )
@@ -34,9 +33,7 @@ class Monitor(BaseWorker):
     output_name = "activities"
     archivable_target_types = {TargetType.ANSWER, TargetType.ARTICLE}
     configurable = BaseWorker.configurable + [
-        Cfg("fetch_until", dt_toisoformat, dt_fromisoformat),
         Cfg("save_type"),
-        Cfg("latest_dt", dt_toisoformat, dt_fromisoformat, read_only=True),
     ]
 
     def __init__(
@@ -47,12 +44,14 @@ class Monitor(BaseWorker):
         - timedelta(days=settings.monitor_fetch_until),
         page_default_timeout=30 * 1000,
         interval=60 * 5,
+        store: SQLiteStore | None = None,
     ):
         super().__init__(
             people,
             init_state_path,
             page_default_timeout,
             interval=interval,
+            store=store,
         )
         self.fetch_until = fetch_until
         self.latest_dt = datetime.now()
@@ -359,8 +358,10 @@ class Monitor(BaseWorker):
             filename: 本次结果文件名。
         """
         filepath = self.results_dir.joinpath(filename)
-        with open(filepath, "w", encoding="utf-8") as fp:
+        tmp_filepath = filepath.with_suffix(f"{filepath.suffix}.tmp")
+        with open(tmp_filepath, "w", encoding="utf-8") as fp:
             json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
+        tmp_filepath.replace(filepath)
         self.logger.info(f"Save {len(items)} activity items to {filepath}.")
 
     async def save_archive_task_items(
@@ -375,13 +376,17 @@ class Monitor(BaseWorker):
             items: 需要交给 archiver 的动态列表。
             filename: 本次任务文件名。
         """
-        filepath = self.tasks_dir.joinpath(filename)
-        with open(filepath, "w", encoding="utf-8") as fp:
-            json.dump(items, fp, ensure_ascii=False, indent=2, cls=JSONEncoder)
-        self.logger.info(f"Save {len(items)} archive task items to {filepath}.")
-        task = ArchiveTask(filepath)
-        await self.push_task(task)
-        self.logger.info(f"Push a task {task} to task list")
+        inserted = await self.sqlite_store.enqueue_monitor_items_and_checkpoint(
+            self.people,
+            items,
+            self.fetch_until,
+            self.latest_dt,
+        )
+        self.logger.info(
+            f"Save {len(items)} archive task items to SQLite, inserted {inserted}."
+        )
+        if inserted and hasattr(self, "archive_event"):
+            self.archive_event.set()
 
     async def save_and_push(self, items: list["ActivityItem"]) -> None:
         """
@@ -391,15 +396,25 @@ class Monitor(BaseWorker):
             items: monitor 本次抓取到的动态列表。
         """
         if not items:
-            self.logger.info("No items, will do nothing.")
+            await self.save_archive_task_items([], "")
+            self.logger.info("No items, only checkpoint updated.")
             return
         filename = f"{dt_str()}.json"
         await self.save_activity_items(items, filename)
         archive_items = self.filter_archivable_items(items)
-        if not archive_items:
-            self.logger.info("No archive task items, will not push task.")
-            return
         await self.save_archive_task_items(archive_items, filename)
+        if not archive_items:
+            self.logger.info("No archive task items, only checkpoint updated.")
+
+    async def before_run(self):
+        """
+        运行前加载 SQLite 配置和当前用户的抓取检查点。
+        """
+        await super().before_run()
+        checkpoint = await self.sqlite_store.get_monitor_checkpoint(self.people)
+        self.fetch_until = checkpoint["fetch_until"]
+        if checkpoint["latest_dt"] is not None:
+            self.latest_dt = checkpoint["latest_dt"]
 
     async def _run(self, playwright, headless=True, **context_extra):
         self.logger.info("Starting a new fetch loop...")

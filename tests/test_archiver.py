@@ -14,6 +14,7 @@ from archive.core.archiver import (
     parse_archive_url,
 )
 from archive.core.base import Target, TargetType
+from archive.storage import SQLiteStore
 
 
 def make_text_archive() -> TextArchive:
@@ -27,7 +28,7 @@ def make_text_archive() -> TextArchive:
         updated_at="",
         target_type="回答",
         html=(
-            '<p><strong>正文</strong></p>'
+            "<p><strong>正文</strong></p>"
             '<figure><img src="https://pic.example/a.jpg" alt="">'
             "<figcaption>图片说明</figcaption></figure>"
         ),
@@ -76,27 +77,23 @@ def test_parse_archive_url_rejects_unsupported_urls(url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_url_writes_compatible_archive_task(tmp_path) -> None:
-    """验证手动链接会写入现有格式的任务文件并推送队列。"""
-    archiver = Archiver.__new__(Archiver)
-    archiver.people = "someone"
-    archiver._base_results_dir = tmp_path
-    archiver.global_configurator = MagicMock()
-    archiver.global_configurator.load_to_worker = AsyncMock()
-    archiver.push_task = AsyncMock()
-    archiver.logger = MagicMock()
+async def test_enqueue_url_writes_sqlite_archive_task(tmp_path) -> None:
+    """验证手动链接会写入 SQLite 归档任务表。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    archiver = Archiver(base_results_dir=tmp_path, store=store)
 
     task, item = await archiver.enqueue_url("https://www.zhihu.com/question/1/answer/2")
+    claimed = await store.claim_archive_task()
 
-    task_items = json.loads(task.activity_path.read_text(encoding="utf-8"))
-    assert task_items[0]["id"] == item["id"]
-    assert task_items[0]["meta"]["action"] == "手动归档"
-    assert task_items[0]["meta"]["target_type"] == TargetType.ANSWER
-    assert task_items[0]["target"]["link"] == (
+    assert task.task_name == item["id"]
+    assert claimed["id"] == item["id"]
+    assert claimed["payload"]["meta"]["action"] == "手动归档"
+    assert claimed["payload"]["meta"]["target_type"] == TargetType.ANSWER
+    assert claimed["payload"]["target"]["link"] == (
         "https://www.zhihu.com/question/1/answer/2"
     )
-    archiver.global_configurator.load_to_worker.assert_awaited_once_with(sync=False)
-    archiver.push_task.assert_awaited_once_with(task)
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -186,9 +183,7 @@ async def test_save_text_archive_writes_html_and_markdown(tmp_path) -> None:
     assert "<strong>正文</strong>" in tmp_path.joinpath("归档文件.html").read_text(
         encoding="utf-8"
     )
-    assert "**正文**" in tmp_path.joinpath("归档文件.md").read_text(
-        encoding="utf-8"
-    )
+    assert "**正文**" in tmp_path.joinpath("归档文件.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
@@ -339,3 +334,26 @@ async def test_store_one_continues_when_text_archive_write_fails(tmp_path) -> No
     assert len(info_files) == 1
     info = json.loads(info_files[0].read_text(encoding="utf-8"))
     assert info["text_archive"] == {}
+
+
+@pytest.mark.asyncio
+async def test_store_propagates_playwright_error() -> None:
+    """验证归档页面失败会传播异常以触发 SQLite 重试。"""
+    archiver = Archiver.__new__(Archiver)
+    archiver.get_context = MagicMock()
+    context_manager = archiver.get_context.return_value
+    context_manager.__aenter__ = AsyncMock(return_value=MagicMock())
+    context_manager.__aexit__ = AsyncMock(return_value=None)
+    archiver.new_page = AsyncMock()
+    empty_page = MagicMock()
+    empty_page.close = AsyncMock()
+    page = MagicMock()
+    page.close = AsyncMock()
+    archiver.new_page.side_effect = [empty_page, page]
+    archiver.store_one = AsyncMock(side_effect=PlaywrightError("页面加载失败"))
+    archiver.logger = MagicMock()
+
+    with pytest.raises(PlaywrightError):
+        await archiver.store(MagicMock(), [{"id": "task"}])
+
+    page.close.assert_awaited_once()

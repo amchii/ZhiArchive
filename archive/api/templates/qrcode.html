@@ -211,7 +211,7 @@
 <div class="card">
     <div class="eyebrow">ZhiArchive</div>
     <h1>扫码登录</h1>
-    <p class="desc">请确保login worker已启动，获取二维码后用知乎 App 扫码完成登录。</p>
+    <p class="desc">获取二维码后用知乎 App 扫码完成登录。</p>
 
     <div class="qr-area">
         <div class="qr-frame" aria-live="polite">
@@ -223,7 +223,7 @@
         </div>
         <div class="status">
             <p id="status-main">等待获取二维码</p>
-            <p id="status-sub">确认 login worker 已启动后，点击按钮创建扫码登录任务。</p>
+            <p id="status-sub">点击按钮创建扫码登录任务。</p>
         </div>
         <div class="actions">
             <button class="ghost-btn" id="retry-btn" type="button" disabled>获取二维码</button>
@@ -296,7 +296,7 @@
       qrImage.removeAttribute('src');
       qrImage.classList.remove('visible');
       showPlaceholder('点击下方按钮获取二维码', true);
-      setStatus('等待获取二维码', '确认 login worker 已启动后，点击按钮创建扫码登录任务。');
+      setStatus('等待获取二维码', '点击按钮创建扫码登录任务。');
       retryBtn.textContent = '获取二维码';
     }
 
@@ -355,28 +355,28 @@
             case 'not_exist': {
               const elapsed = Date.now() - lastRequestAt;
               if (elapsed < WAIT_FOR_WORKER_MS) {
-                setStatus('正在等待登录 worker 启动浏览器获取二维码...', '请稍候，二维码生成后会自动显示。');
+                setStatus('正在启动浏览器获取二维码...', '请稍候，二维码生成后会自动显示。');
                 break;
               }
               clearInterval(scanTimer);
               clearInterval(imageTimer);
               qrImage.classList.remove('visible');
               showPlaceholder('二维码获取超时，请点击“重新获取”');
-              setStatus('二维码获取超时，请点击“重新获取”', '可能登录 worker 未启动或生成超时。');
+              setStatus('二维码获取超时，请点击“重新获取”', '可能浏览器启动较慢或二维码生成超时。');
               return;
             }
             case 'pending':
-              setStatus('二维码生成中...', '正在等待登录 worker 输出二维码。');
+              setStatus('二维码生成中...', '正在等待后台登录任务输出二维码。');
               break;
             case 'waiting_for_scan':
               if (qrImage.classList.contains('visible')) {
                 setStatus('请用知乎 App 扫码登录', '扫码完成后等待自动跳转。');
               } else {
-                setStatus('二维码生成中...', '正在等待登录 worker 输出二维码。');
+                setStatus('二维码生成中...', '正在等待后台登录任务输出二维码。');
               }
               break;
             default:
-              setStatus('二维码生成中...', '正在等待登录 worker 输出二维码。');
+              setStatus('二维码生成中...', '正在等待后台登录任务输出二维码。');
           }
         } catch (error) {
           console.error(error);

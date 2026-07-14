@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import pathlib
@@ -20,12 +19,11 @@ from playwright.async_api import (
     async_playwright,
 )
 from playwright_stealth import Stealth
-from redis import asyncio as aioredis
 
 from archive.config import default, settings
 from archive.env import user_agent
+from archive.storage import SQLiteStore, get_default_store
 from archive.utils.common import dt_str
-from archive.utils.encoder import JSONEncoder
 
 
 class AbnormalError(Exception):
@@ -140,15 +138,20 @@ async def get_context(
 
 
 class ArchiveTask:
-    def __init__(self, activity_info_path):
-        self.activity_path = pathlib.Path(activity_info_path).resolve()
+    def __init__(
+        self,
+        task_id: str,
+        payload: ActivityItem,
+    ):
+        self.id = task_id
+        self.payload = payload
 
     @property
     def task_name(self):
-        return str(self.activity_path)
+        return self.id
 
     def as_value(self) -> str:
-        return f"{self.activity_path}"
+        return self.id
 
     @classmethod
     def from_value(cls, v: str) -> "ArchiveTask":
@@ -214,17 +217,17 @@ class ConfigFilter(str, Enum):
 class WorkStatus(str, Enum):
     RUNNING = "running"  # 正在运行
     WAITING = "waiting"  # 正在等待下次运行
+    ERROR = "error"  # 后台任务异常退出
 
 
-class GlobalRedisConfigurator:
+class GlobalSQLiteConfigurator:
     """
-    Redis全局配置
+    SQLite 全局运行配置。
     """
 
     def __init__(self, worker: "BaseWorker") -> None:
         self.worker = worker
-        self.redis = worker.redis
-        self.configs_key = worker.global_configs_key
+        self.store = worker.sqlite_store
         self.logger = self.worker.logger
 
     @property
@@ -236,14 +239,11 @@ class GlobalRedisConfigurator:
 
     async def get_configs(self) -> dict[str, Any]:
         """
-        获取全局配置，兼容旧版 worker 独立配置。
+        获取全局配置。
         """
         configs = self.worker.get_global_configs()
-        if configs_str := await self.redis.get(self.configs_key):
-            configs.update(self._extract_global_configs(json.loads(configs_str)))
-            return configs
-
-        configs.update(await self._get_legacy_configs())
+        stored = await self.store.get_settings("global")
+        configs.update(self._extract_global_configs(stored))
         return configs
 
     def _extract_global_configs(self, configs: dict[str, Any]) -> dict[str, Any]:
@@ -256,43 +256,11 @@ class GlobalRedisConfigurator:
             if key in self.config_names and value is not None
         }
 
-    async def _iter_legacy_config_keys(self) -> AsyncGenerator[str, None]:
-        """
-        遍历旧版 worker 配置 key。
-        """
-        pattern = f"{self.worker.redis_key_prefix}:*:configs"
-        keys = []
-        async for key in self.redis.scan_iter(match=pattern):
-            if isinstance(key, bytes):
-                key = key.decode()
-            if key != self.configs_key:
-                keys.append(key)
-        for key in sorted(keys):
-            yield key
-
-    async def _get_legacy_configs(self) -> dict[str, Any]:
-        """
-        从旧版 worker 独立配置中读取全局字段。
-        """
-        legacy_configs: dict[str, Any] = {}
-        async for configs_key in self._iter_legacy_config_keys():
-            configs_str = await self.redis.get(configs_key)
-            if not configs_str:
-                continue
-            try:
-                configs = json.loads(configs_str)
-            except json.JSONDecodeError:
-                continue
-            legacy_configs.update(self._extract_global_configs(configs))
-        return legacy_configs
-
     async def _write_configs(self, configs: dict[str, Any]) -> Any:
         """
         写入全局配置。
         """
-        return await self.redis.set(
-            self.configs_key, json.dumps(configs, cls=JSONEncoder)
-        )
+        return await self.store.set_settings("global", configs)
 
     async def write_configs(self, configs: dict[str, Any]) -> None:
         """
@@ -305,37 +273,33 @@ class GlobalRedisConfigurator:
 
     async def sync_from_worker(self) -> Any:
         """
-        将当前 worker 中的全局配置同步到 Redis。
+        将当前 worker 中的全局配置同步到 SQLite。
         """
         return await self._write_configs(self.worker.get_global_configs())
 
     async def load_to_worker(self, sync: bool = True) -> None:
         """
-        将 Redis 全局配置加载到当前 worker。
+        将 SQLite 全局配置加载到当前 worker。
         """
         self.worker.load_global_configs(await self.get_configs())
-        if sync:
-            await self.sync_from_worker()
 
 
-class RedisConfigurator:
+class SQLiteConfigurator:
     """
-    Redis配置
+    SQLite worker 运行配置。
     """
 
     def __init__(self, worker: "BaseWorker"):
         self.worker = worker
-        self.redis = worker.redis
-        self.configs_key = worker.configs_key
+        self.store = worker.sqlite_store
         self.logger = self.worker.logger
 
     async def _get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
         configs = self.worker.get_configs(filter_)
-        if configs_str := await self.redis.get(self.configs_key):
-            all_ = json.loads(configs_str)
-            for cfg in self.worker.get_configurable(filter_):
-                if cfg.name in all_ and not cfg.depend_on:
-                    configs[cfg.name] = all_[cfg.name]
+        all_ = await self.store.get_settings(f"worker:{self.worker.name}")
+        for cfg in self.worker.get_configurable(filter_):
+            if cfg.name in all_ and not cfg.depend_on:
+                configs[cfg.name] = all_[cfg.name]
         return configs
 
     async def get_configs(self, filter_: ConfigFilter = ConfigFilter.ALL):
@@ -343,16 +307,19 @@ class RedisConfigurator:
         return await self._get_configs(filter_)
 
     async def _write_configs(self, configs: dict[str, Any]):
-        return await self.redis.set(
-            self.configs_key, json.dumps(configs, cls=JSONEncoder)
-        )
+        return await self.store.set_settings(f"worker:{self.worker.name}", configs)
 
     async def write_writeable_configs(self, configs: dict[str, Any]):
         await self.worker.global_configurator.load_to_worker(sync=False)
         loaded = self.worker.load_configs(configs)
-        all_ = await self._get_configs()
+        all_ = await self._get_configs(ConfigFilter.WRITABLE)
         all_.update(loaded)
-        return await self._write_configs(all_)
+        writable_names = {
+            cfg.name for cfg in self.worker.get_configurable(ConfigFilter.WRITABLE)
+        }
+        return await self._write_configs(
+            {key: value for key, value in all_.items() if key in writable_names}
+        )
 
     async def sync_from_worker(self):
         await self._write_configs(self.worker.get_configs(ConfigFilter.ALL))
@@ -361,20 +328,14 @@ class RedisConfigurator:
         await self.worker.global_configurator.load_to_worker()
         configs = await self._get_configs()
         if not configs:
-            self.logger.info("No configs found in redis.")
+            self.logger.info("No configs found in SQLite.")
         else:
             self.worker.load_configs(configs)
-        await self.sync_from_worker()
 
 
 class BaseWorker:
     name = "base"
     output_name = ""
-    redis_key_prefix = "zhi_archive:archive"
-    global_configs_key = f"{redis_key_prefix}:global:configs"
-    state_path_key = f"{redis_key_prefix}:state_path"
-    tasks_key = f"{redis_key_prefix}:tasks"  # list
-    tasks_result_key = f"{redis_key_prefix}:task_results"  # hash
     abnormal_texts = ["您的网络环境存在异常", "请输入验证码进行验证", "意见反馈"]
     global_configurable: list[Cfg] = [
         Cfg("people"),
@@ -393,8 +354,8 @@ class BaseWorker:
         init_state_path: str | pathlib.Path = None,
         page_default_timeout: int = 30 * 1000,
         base_results_dir: str | pathlib.Path = None,
-        redis_url: str = settings.redis_url,
         interval: int = 10,
+        store: SQLiteStore | None = None,
     ):
         self.people = people or settings.people
         self.init_state_path = init_state_path or settings.states_dir.joinpath(
@@ -402,17 +363,13 @@ class BaseWorker:
         )
         self.page_default_timeout = page_default_timeout
         self._base_results_dir = base_results_dir or settings.results_dir
-        self.redis = aioredis.from_url(
-            redis_url,
-            password=settings.redis_passwd,
-            encoding="utf-8",
-            decode_responses=True,
-        )
+        self.sqlite_store = store or get_default_store()
         self.interval = interval
         self.logger = logging.getLogger(self.name or "default")
+        self.browser_semaphore: asyncio.Semaphore | None = None
         self.init_configurable()
-        self.global_configurator = GlobalRedisConfigurator(self)
-        self.configurator = RedisConfigurator(self)
+        self.global_configurator = GlobalSQLiteConfigurator(self)
+        self.configurator = SQLiteConfigurator(self)
 
     def init_configurable(self):
         name_to_cfg = {cfg.name: cfg for cfg in self.configurable}
@@ -421,36 +378,31 @@ class BaseWorker:
                 name_to_cfg[cfg.depend_on]._updates.append(cfg)
 
     @property
-    def personal_key(self):
-        return f"{self.redis_key_prefix}:{self.people}"
-
-    @property
     def person_page_url(self):
         return default.person_page_url.format(people=self.people)
 
-    @property
-    def status_key(self):
-        return f"{self.redis_key_prefix}:{self.name}:status"
-
     async def get_status(self) -> WorkStatus:
-        return WorkStatus(await self.redis.get(self.status_key) or WorkStatus.WAITING)
+        return WorkStatus(await self.sqlite_store.get_worker_status(self.name))
 
     async def set_status(self, status: WorkStatus):
-        return await self.redis.set(self.status_key, status.value)
+        return await self.sqlite_store.set_worker_status(self.name, status.value)
 
-    async def get_state_path_from_redis(self) -> pathlib.Path | None:
-        path = await self.redis.get(self.state_path_key)
-        return pathlib.Path(path) if path else None
+    async def get_saved_state_path(self) -> pathlib.Path | None:
+        """
+        读取 SQLite 中保存的 storage state 路径。
+        """
+        return await self.sqlite_store.get_state_path(
+            pathlib.Path(self.init_state_path)
+        )
 
-    async def set_state_path_to_redis(self, path: str | pathlib.Path):
-        await self.redis.set(self.state_path_key, str(path))
+    async def set_state_path(self, path: str | pathlib.Path):
+        """
+        保存当前使用的 storage state 路径。
+        """
+        await self.sqlite_store.set_state_path(path)
 
     async def get_state_path(self) -> pathlib.Path | str:
-        return await self.get_state_path_from_redis() or self.init_state_path
-
-    @property
-    def configs_key(self):
-        return f"{self.redis_key_prefix}:{self.name}:configs"
+        return await self.get_saved_state_path() or self.init_state_path
 
     @lru_cache(None)
     def get_configurable(self, filter_: ConfigFilter = ConfigFilter.ALL):
@@ -500,12 +452,14 @@ class BaseWorker:
         return loaded
 
     async def push_task(self, task: ArchiveTask):
-        return await self.redis.rpush(self.tasks_key, task.as_value())
+        if not hasattr(task, "payload") or task.payload is None:
+            raise ValueError("ArchiveTask payload is required for SQLite queue")
+        return await self.sqlite_store.enqueue_archive_item(task.payload)
 
     async def pop_task(self) -> ArchiveTask | None:
-        task = await self.redis.lpop(self.tasks_key)
+        task = await self.sqlite_store.claim_archive_task()
         if task:
-            return ArchiveTask.from_value(task)
+            return ArchiveTask(task["id"], payload=task["payload"])
 
     @property
     def results_dir(self):
@@ -581,18 +535,14 @@ class BaseWorker:
         self.logger.info("出现异常，暂停运行")
         await self.pause()
 
-    @property
-    def pause_key(self):
-        return f"{self.redis_key_prefix}:{self.name}:pause"
-
     async def pause(self):
-        return await self.redis.set(self.pause_key, 1)
+        return await self.sqlite_store.set_worker_paused(self.name, True)
 
     async def resume(self):
-        return await self.redis.set(self.pause_key, 0)
+        return await self.sqlite_store.set_worker_paused(self.name, False)
 
     async def need_pause(self) -> bool:
-        return int(await self.redis.get(self.pause_key) or 1) == 1
+        return await self.sqlite_store.get_worker_paused(self.name)
 
     async def _run(self, playwright, headless=True, **context_extra):
         raise NotImplementedError
@@ -603,8 +553,6 @@ class BaseWorker:
 
     async def after_run(self):
         self.logger.debug("After run")
-        self.logger.debug("Write all configs to redis")
-        await self.configurator.sync_from_worker()
 
     @contextlib.asynccontextmanager
     async def rotate(self):
@@ -615,10 +563,17 @@ class BaseWorker:
             self.logger.info(f"{self.name} resumed")
         await self.before_run()
         await self.set_status(WorkStatus.RUNNING)
-        yield
-        await self.set_status(WorkStatus.WAITING)
-        await self.after_run()
-        await asyncio.sleep(self.interval)
+        cancelled = False
+        try:
+            yield
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        finally:
+            await self.set_status(WorkStatus.WAITING)
+            await self.after_run()
+            if not cancelled:
+                await asyncio.sleep(self.interval)
 
     async def run(
         self,
@@ -632,7 +587,13 @@ class BaseWorker:
                 async with self.rotate():
                     try:
                         self.logger.debug(f"{self.name}: New loop")
-                        await self._run(playwright, headless, **context_extra)
+                        if self.browser_semaphore is None:
+                            await self._run(playwright, headless, **context_extra)
+                        else:
+                            async with self.browser_semaphore:
+                                await self._run(playwright, headless, **context_extra)
+                    except asyncio.CancelledError:
+                        raise
                     except AbnormalError as e:
                         self.logger.error(e)
                         await self.handle_abnormal()

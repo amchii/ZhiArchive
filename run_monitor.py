@@ -1,23 +1,7 @@
-import asyncio
-from datetime import datetime, timedelta
-
-from archive.config import default, settings
-from archive.core.monitor import Monitor
-
-
-def get_monitor():
-    return Monitor(
-        settings.people,
-        settings.states_dir.joinpath(default.state_file),
-        fetch_until=datetime.now() - timedelta(days=settings.monitor_fetch_until),
-        interval=settings.monitor_interval,
-    )
-
-
-async def main():
-    monitor = get_monitor()
-    await monitor.run(headless=settings.monitor_headless)
+def main() -> None:
+    """提示用户使用单进程 API 入口启动 monitor。"""
+    raise SystemExit("monitor 已合并到 FastAPI lifespan，请使用 bash run_api.sh 启动。")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

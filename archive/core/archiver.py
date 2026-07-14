@@ -9,7 +9,8 @@ from urllib import parse
 
 import aiofiles
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page, Route
+from playwright.async_api import Page, Route, async_playwright
+from playwright_stealth import Stealth
 
 from archive.config import settings
 from archive.core.base import (
@@ -20,10 +21,10 @@ from archive.core.base import (
     Cfg,
     Target,
     TargetType,
+    WorkStatus,
 )
 from archive.utils.common import (
     dt_fromisoformat,
-    dt_str,
     get_validate_filename,
     uuid_hex,
 )
@@ -733,14 +734,11 @@ class Archiver(BaseWorker):
             ),
             people=self.people,
         )
-        filepath = self.tasks_dir.joinpath(f"manual-{dt_str(now)}-{item_id[:8]}.json")
-        async with aiofiles.open(filepath, "w", encoding="utf-8") as fp:
-            await fp.write(
-                json.dumps([item], ensure_ascii=False, indent=2, cls=JSONEncoder)
-            )
-        task = ArchiveTask(filepath)
+        task = ArchiveTask(item_id, payload=item)
         await self.push_task(task)
         self.logger.info(f"Push a manual archive task {task} to task list")
+        if hasattr(self, "archive_event"):
+            self.archive_event.set()
         return task, item
 
     async def fill_target_metadata(
@@ -894,8 +892,6 @@ class Archiver(BaseWorker):
                 page = await self.new_page(context)
                 try:
                     await self.store_one(item, page=page)
-                except PlaywrightError as e:
-                    self.logger.warning(e)
                 finally:
                     await page.close()
                 await asyncio.sleep(1)
@@ -905,6 +901,68 @@ class Archiver(BaseWorker):
     async def _run(self, playwright, headless=True, **context_extra):
         if task := await self.pop_task():
             self.logger.info(f"New archive task: {task}")
-            async with aiofiles.open(task.activity_path, encoding="utf-8") as fp:
-                item_list = json.loads(await fp.read())
-            await self.store(playwright, item_list, headless, **context_extra)
+            await self.store(playwright, [task.payload], headless, **context_extra)
+
+    async def run_queue(
+        self,
+        wakeup_event: asyncio.Event,
+        headless: bool = True,
+        idle_timeout: int = 30,
+        **context_extra,
+    ) -> None:
+        """
+        持续从 SQLite 领取并执行归档任务。
+
+        Args:
+            wakeup_event: 生产者提交任务后用于唤醒消费者的进程内事件。
+            headless: 是否使用无头浏览器。
+            idle_timeout: 队列空闲时兜底扫描间隔。
+        """
+        self.logger.info("archiver queue loop started.")
+        while True:
+            if await self.need_pause():
+                await self.set_status(WorkStatus.WAITING)
+                await asyncio.sleep(1)
+                continue
+
+            wakeup_event.clear()
+            claimed_any = False
+            while task := await self.pop_task():
+                claimed_any = True
+                await self.configurator.load_to_worker()
+                await self.set_status(WorkStatus.RUNNING)
+                self.logger.info(f"Claim archive task: {task.task_name}")
+                try:
+                    async with Stealth().use_async(async_playwright()) as playwright:
+                        if self.browser_semaphore is None:
+                            await self.store(
+                                playwright,
+                                [task.payload],
+                                headless,
+                                **context_extra,
+                            )
+                        else:
+                            async with self.browser_semaphore:
+                                await self.store(
+                                    playwright,
+                                    [task.payload],
+                                    headless,
+                                    **context_extra,
+                                )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as error:
+                    self.logger.exception(error)
+                    await self.sqlite_store.mark_archive_task_failed(
+                        task.task_name,
+                        str(error),
+                    )
+                else:
+                    await self.sqlite_store.mark_archive_task_done(task.task_name)
+
+            await self.set_status(WorkStatus.WAITING)
+            if not claimed_any:
+                try:
+                    await asyncio.wait_for(wakeup_event.wait(), timeout=idle_timeout)
+                except asyncio.TimeoutError:
+                    pass

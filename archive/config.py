@@ -39,10 +39,7 @@ class Settings(BaseSettings):
     activity_item_selector: str = default.activity_item_selector
     context_default_timeout: int = 10 * 1000  # 10s
     algorithm: str = "HS256"
-    # redis配置
-    redis_host: str = "127.0.0.1"
-    redis_port: int = 6379
-    redis_passwd: str | None = None
+    sqlite_path: pathlib.Path = root_dir.joinpath("var/zhi_archive.sqlite3")
     # 是否使用无头模式
     archiver_headless: bool = True
     monitor_headless: bool = True
@@ -58,10 +55,6 @@ class Settings(BaseSettings):
     screenshot_max_page_scroll_height: int = (
         0  # 截图允许的页面的最大高度，像素值。0表示不限制
     )
-
-    @property
-    def redis_url(self):
-        return f"redis://{self.redis_host}:{self.redis_port}"
 
 
 class APISettings(BaseSettings):

@@ -1,6 +1,6 @@
-import asyncio
 import logging
 import pathlib
+from datetime import datetime, timedelta
 from enum import Enum
 from urllib import parse
 
@@ -8,20 +8,24 @@ from playwright.async_api import (
     Browser,
     Page,
     Playwright,
-    async_playwright,
 )
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
-from playwright_stealth import Stealth
-from redis import asyncio as aioredis
 
 from archive.config import settings
 from archive.env import user_agent
+from archive.storage import SQLiteStore, get_default_store
 
 from .base import init_context
 
 logger = logging.getLogger("login_worker")
+
+
+def normalize_task_name(task_name: str) -> str:
+    """把旧版二维码路径或新版前缀统一转换为登录任务 ID。"""
+    name = pathlib.Path(str(task_name)).name
+    return name.split(".", maxsplit=1)[0]
 
 
 def at_home(url):
@@ -45,8 +49,13 @@ class QRCodeTask:
         self.state_path = pathlib.Path(state_path).resolve()
 
     @property
+    def id(self) -> str:
+        """返回登录任务前缀 ID。"""
+        return self.qrcode_path.name.split(".", maxsplit=1)[0]
+
+    @property
     def task_name(self) -> str:
-        return str(self.qrcode_path)
+        return self.id
 
     def as_value(self) -> str:
         return f"{self.qrcode_path}:{self.state_path}"
@@ -63,56 +72,54 @@ class QRCodeTask:
 
 
 class Base:
-    redis_key_prefix = "zhi_archive:login"
-    qrcode_task_key = f"{redis_key_prefix}:qrcode_task"
-    qrcode_task_result_key = f"{redis_key_prefix}:qrcode_task_result"
     task_timeout = 60 * 5
 
-    def __init__(self, redis_url: str = settings.redis_url):
-        self.redis = aioredis.from_url(
-            redis_url,
-            password=settings.redis_passwd,
-            encoding="utf-8",
-            decode_responses=True,
-        )
+    def __init__(
+        self,
+        store: SQLiteStore | None = None,
+    ):
+        self.store = store or get_default_store()
 
     async def new_task(self, task: QRCodeTask) -> QRCodeTask:
         """
-        新任务
+        创建二维码登录任务。
 
-        确保当前没有正在进行的任务，否则返回当前任务
+        Args:
+            task: 待创建的二维码登录任务。
         """
-        exist = await self.get_qrcode_task()
-        if exist:
-            task_status = await self.get_qrcode_task_status(exist.task_name)
-            if task_status in [
-                QRCodeTaskStatus.PENDING,
-                QRCodeTaskStatus.WAITING_FOR_SCAN,
-            ]:
-                return exist
-        await self.redis.set(
-            self.qrcode_task_key, task.as_value(), ex=self.task_timeout
+        row = await self.store.create_login_task(
+            task.id,
+            task.qrcode_path,
+            task.state_path,
+            datetime.now() + timedelta(seconds=self.task_timeout),
         )
-        return task
-
-    async def get_qrcode_task(self) -> QRCodeTask | None:
-        task = await self.redis.get(self.qrcode_task_key)
-        if not task:
-            return
-        return QRCodeTask.from_value(task)
+        return QRCodeTask(row["qrcode_path"], row["state_path"])
 
     async def get_qrcode_task_status(self, task_name: str) -> QRCodeTaskStatus:
-        status = await self.redis.hget(self.qrcode_task_result_key, task_name)
+        """
+        读取二维码登录任务状态。
+
+        Args:
+            task_name: 登录任务 ID 或旧版任务路径。
+        """
+        status = await self.store.get_login_task_status(normalize_task_name(task_name))
         try:
             return QRCodeTaskStatus(status)
         except ValueError:
             return QRCodeTaskStatus.NO_EXIST
 
     async def set_qrcode_task_status(self, task_name: str, status: QRCodeTaskStatus):
-        result = await self.redis.hset(
-            self.qrcode_task_result_key, task_name, status.value
+        """
+        更新二维码登录任务状态。
+
+        Args:
+            task_name: 登录任务 ID 或旧版任务路径。
+            status: 新状态。
+        """
+        await self.store.set_login_task_status(
+            normalize_task_name(task_name),
+            status.value,
         )
-        return result
 
 
 class ZhiLoginClient(Base):
@@ -120,47 +127,18 @@ class ZhiLoginClient(Base):
 
 
 class ZhiLogin(Base):
-    redis_key_prefix = "zhi_archive:login"
-    qrcode_task_key = f"{redis_key_prefix}:qrcode_task"
-    qrcode_task_result_key = f"{redis_key_prefix}:qrcode_task_result"
-
     def __init__(
         self,
         scan_timeout: int = 1000 * 60 * 3,
-        redis_url: str = settings.redis_url,
+        store: SQLiteStore | None = None,
         headless=True,
         **context_extra,
     ):
-        super().__init__(redis_url)
+        super().__init__(store=store)
         self.scan_timeout = scan_timeout
         self.headless = headless
         context_extra.setdefault("user_agent", user_agent)
         self.context_extra = context_extra
-
-    async def get_new_req(self) -> QRCodeTask | None:
-        task = await self.get_qrcode_task()
-        if not task:
-            return
-        qrcode_path = task.qrcode_path
-        if (
-            qrcode_path
-            and (await self.get_qrcode_task_status(task.task_name))
-            == QRCodeTaskStatus.NO_EXIST
-        ):
-            return task
-        return
-
-    async def run(self):
-        logger.info("Start login worker.")
-        async with Stealth().use_async(async_playwright()) as playwright:
-            while True:
-                try:
-                    if qrcode_task := await self.get_new_req():
-                        logger.info(f"新的登录二维码任务: {qrcode_task}")
-                        await self.get_qrcode(playwright, qrcode_task)
-                except Exception as e:
-                    logger.exception(e)
-                await asyncio.sleep(1)
 
     async def _wait_for_login_success(self, page: Page, task_key: str):
         logger.info(f"等待扫码登录: {task_key}")
@@ -194,18 +172,21 @@ class ZhiLogin(Base):
         browser: Browser = await getattr(playwright, settings.browser.value).launch(
             headless=self.headless
         )
-        context = await browser.new_context(**self.context_extra)
-        await init_context(context)
-        async with context:
-            await self.set_qrcode_task_status(
-                qrcode_task.task_name, QRCodeTaskStatus.PENDING
-            )
-            page = await context.new_page()
-            await page.goto("https://www.zhihu.com/signin?next=%2F")
-            _ = await self._wait_qrcode(page)
-            img_bytes = await self._wait_qrcode(page, qrcode_task.qrcode_path)
+        try:
+            context = await browser.new_context(**self.context_extra)
+            await init_context(context)
+            async with context:
+                await self.set_qrcode_task_status(
+                    qrcode_task.task_name, QRCodeTaskStatus.PENDING
+                )
+                page = await context.new_page()
+                await page.goto("https://www.zhihu.com/signin?next=%2F")
+                _ = await self._wait_qrcode(page)
+                img_bytes = await self._wait_qrcode(page, qrcode_task.qrcode_path)
 
-            await self._wait_for_login_success(page, qrcode_task.task_name)
-            await context.storage_state(path=qrcode_task.state_path)
-            logger.info(f"保存登录状态: {qrcode_task.state_path}")
-            return img_bytes
+                await self._wait_for_login_success(page, qrcode_task.task_name)
+                await context.storage_state(path=qrcode_task.state_path)
+                logger.info(f"保存登录状态: {qrcode_task.state_path}")
+                return img_bytes
+        finally:
+            await browser.close()

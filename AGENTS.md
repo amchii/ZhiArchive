@@ -4,16 +4,18 @@
 
 ## 项目概览
 
-ZhiArchive 是一个用于监测知乎用户动态并将相关内容保存到本地的 Python 项目，核心依赖包括 Playwright、FastAPI、Redis 和 Pydantic Settings。
+ZhiArchive 是一个用于监测知乎用户动态并将相关内容保存到本地的 Python 项目，核心依赖包括 Playwright、FastAPI、SQLite 和 Pydantic Settings。
 
 主要模块：
 
-- `archive/core/monitor.py`：监测知乎用户动态，生成动态快照，并把待归档链接发送给 archiver。
+- `archive/core/monitor.py`：监测知乎用户动态，生成动态快照，并把待归档 payload 写入 SQLite。
 - `archive/core/archiver.py`：打开目标回答或文章页面并保存截图和元信息。
 - `archive/core/login.py`：处理知乎登录并获取运行所需认证状态。
 - `archive/api/`：FastAPI 接口、页面渲染和鉴权逻辑。
 - `archive/config.py`：运行配置入口，支持环境变量、`.env` 和 `.apienv`。
-- `run_*.py`：本地启动各 worker 或 API 的入口脚本。
+- `archive/storage.py`：SQLite schema、运行配置、抓取进度和任务队列。
+- `archive/services.py`：FastAPI lifespan 中的后台服务容器。
+- `run_api.sh`：单进程 API 入口；其他 `run_*.py` 仅保留废弃提示。
 - `docker-compose.yaml`、`docker-compose2.yaml`：容器化部署配置。
 
 ## 常用命令
@@ -40,14 +42,7 @@ uv pip compile pyproject.toml -o requirements.txt
 bash run_api.sh
 ```
 
-或直接运行相关入口：
-
-```sh
-python run_login_worker.py
-python run_monitor.py
-python run_archiver.py
-python run_all_workers_in_one.py
-```
+Monitor、archiver 和二维码登录任务由 FastAPI lifespan 启动，不再单独运行 worker。
 
 Docker 启动：
 
@@ -79,7 +74,9 @@ pytest
 - 每个函数下至少保留一段简短说明（简体中文），描述该函数的作用。
 - 参数 Docstring 使用 Google 风格。
 - 修改异步 Playwright 流程时，注意浏览器上下文、页面关闭和异常恢复，避免 worker 长时间运行后资源泄漏。
-- 对 Redis 队列、cookie state、截图目录结构的改动应保持向后兼容，除非用户明确要求破坏性迁移。
+- 对 SQLite 队列、cookie state、截图目录结构的改动应保持向后兼容，除非用户明确要求破坏性迁移。
+- 不要从 API 配置或状态查询路径直接修改正在运行的后台 worker 实例；配置读写应通过 SQLite store 或临时配置对象完成。
+- 修改 monitor checkpoint 时，应避免覆盖正在运行的抓取结果；默认要求 monitor 已暂停且不处于 running 状态。
 
 ## 运行与数据注意事项
 

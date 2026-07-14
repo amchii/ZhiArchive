@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### 破坏性变更
+
+- 移除 Redis 和独立 worker 部署，改为单个 FastAPI 进程通过 lifespan 启动 monitor、archiver 和按需二维码登录任务。
+- 运行时配置、暂停状态、抓取检查点、登录任务和归档任务队列改为保存到本地 SQLite，默认路径为 `var/zhi_archive.sqlite3`。
+- 本版本不提供 Redis 到 SQLite 的自动迁移工具；已有 Redis 数据需要手动迁移或以全新部署方式使用。
+
 ## 26.7.0 - 2026-07-09
 
 本版本整理了自 `37889acc` 以来的功能改动和兼容性修复。

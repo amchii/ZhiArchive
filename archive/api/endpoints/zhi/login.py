@@ -1,5 +1,4 @@
 import asyncio
-import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,8 +8,8 @@ from pydantic import BaseModel
 from archive.api.render import templates
 from archive.api.security import verify_user_from_cookie
 from archive.config import settings
-from archive.core.api_client import get_api_client
 from archive.core.login import QRCodeTask, QRCodeTaskStatus, ZhiLoginClient
+from archive.services import get_current_services, new_qrcode_task
 
 router = APIRouter(dependencies=[Depends(verify_user_from_cookie)])
 public_router = APIRouter()
@@ -59,10 +58,13 @@ async def qrcode_info(prefix: str):
 
 @router.get("/qrcode/new", response_model=QRCodeTaskResponse)
 async def new_login_qrcode():
-    prefix = os.urandom(10).hex()
-    qrcode_task = get_qrcode_task(prefix)
-    client = ZhiLoginClient()
-    task = await client.new_task(qrcode_task)
+    qrcode_task = new_qrcode_task()
+    services = get_current_services()
+    if services is not None:
+        task = await services.start_login_task(qrcode_task)
+    else:
+        client = ZhiLoginClient()
+        task = await client.new_task(qrcode_task)
     return {"qrcode": get_task_prefix(task)}
 
 
@@ -97,6 +99,8 @@ async def login_state(prefix: str):
 @router.post("/state/{prefix}/use")
 async def use_state(prefix: str) -> str:
     qrcode_task = get_qrcode_task(prefix)
-    client = get_api_client()
-    await client.set_state_path_to_redis(qrcode_task.state_path)
-    return str(await client.get_state_path())
+    client = ZhiLoginClient()
+    await client.store.set_state_path(qrcode_task.state_path)
+    return str(
+        await client.store.get_state_path(settings.states_dir / "zhihu.state.json")
+    )

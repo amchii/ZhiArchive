@@ -1,19 +1,9 @@
-import asyncio
-
-from archive.config import default, settings
-from archive.core.archiver import Archiver
-
-
-def get_archiver():
-    return Archiver(
-        settings.people, settings.states_dir.joinpath(default.state_file), interval=1
+def main() -> None:
+    """提示用户使用单进程 API 入口启动 archiver。"""
+    raise SystemExit(
+        "archiver 已合并到 FastAPI lifespan，请使用 bash run_api.sh 启动。"
     )
 
 
-async def main():
-    archiver = get_archiver()
-    await archiver.run(headless=settings.archiver_headless)
-
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

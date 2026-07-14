@@ -555,6 +555,35 @@
                 <button class="primary" type="button" onclick="submitConfigUpdate('monitor')">保存变更</button>
             </div>
         </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <p class="eyebrow">Monitor</p>
+                    <h2>抓取进度</h2>
+                </div>
+                <div class="pill">Checkpoint</div>
+            </div>
+            <div class="inputs">
+                <div class="field">
+                    <label for="monitorCheckpointPeople">知乎用户 ID</label>
+                    <input id="monitorCheckpointPeople" readonly>
+                </div>
+                <div class="field">
+                    <label for="monitorCheckpointFetchUntil">下一轮抓取截止时间</label>
+                    <input id="monitorCheckpointFetchUntil" type="datetime-local" required>
+                    <p class="field-help">Monitor 会抓取到这个时间点为止。</p>
+                </div>
+                <div class="field">
+                    <label for="monitorCheckpointLatestDt">最近抓取到的新动态时间</label>
+                    <input id="monitorCheckpointLatestDt" readonly>
+                </div>
+            </div>
+            <div class="actions">
+                <button class="ghost" id="monitorCheckpointRefresh" type="button">刷新</button>
+                <button class="primary" id="monitorCheckpointSave" type="button">保存变更</button>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -667,6 +696,7 @@
             document.getElementById('globalPeople').value = data.people || people;
             refreshConfigs('archiver');
             refreshConfigs('monitor');
+            fetchMonitorCheckpoint();
           });
         } else {
           showToast('保存失败', '目标用户更新失败。', 'error');
@@ -739,7 +769,6 @@
     page_default_timeout: '页面默认超时',
     interval: '执行间隔',
     screenshot_max_page_scroll_height: '截图最大滚动高度',
-    fetch_until: '抓取截止时间',
     save_type: '保存格式'
   };
 
@@ -748,7 +777,6 @@
     page_default_timeout: '单位为毫秒，影响 Playwright 等待页面的最长时间。',
     interval: '单位为秒，worker 两次执行之间的等待时间。',
     screenshot_max_page_scroll_height: '0 表示不限制截图高度。',
-    fetch_until: 'Monitor 会抓取到这个时间点为止。',
     save_type: '截图文件格式。'
   };
 
@@ -963,10 +991,61 @@
       .catch(error => {
         console.error('Failed to update config:', error);
         showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
-      });
-  }
+	      });
+	  }
 
-  function fetchPauseState(type) {
+	  function renderMonitorCheckpoint(data) {
+	    document.getElementById('monitorCheckpointPeople').value = data.people || '';
+	    document.getElementById('monitorCheckpointFetchUntil').value = toDatetimeLocal(data.fetch_until);
+	    document.getElementById('monitorCheckpointLatestDt').value = data.latest_dt
+	      ? toDatetimeLocal(data.latest_dt)
+	      : '尚无成功抓取记录';
+	  }
+
+	  function fetchMonitorCheckpoint() {
+	    fetch('/zhi/core/monitor/checkpoint')
+	      .then(response => response.json())
+	      .then(data => {
+	        renderMonitorCheckpoint(data);
+	      })
+	      .catch(error => {
+	        console.error('Failed to fetch monitor checkpoint:', error);
+	        showToast('刷新失败', '无法读取 Monitor 抓取进度。', 'error');
+	      });
+	  }
+
+	  function submitMonitorCheckpoint() {
+	    const fetchUntil = document.getElementById('monitorCheckpointFetchUntil').value;
+	    if (!fetchUntil) {
+	      showToast('保存失败', '下一轮抓取截止时间不能为空。', 'error');
+	      return;
+	    }
+	    fetch('/zhi/core/monitor/checkpoint', {
+	      method: 'PUT',
+	      headers: {
+	        'Content-Type': 'application/json'
+	      },
+	      body: JSON.stringify({fetch_until: fetchUntil})
+	    })
+	      .then(response => {
+	        if (!response.ok) {
+	          return response.json().then(data => {
+	            throw new Error(data.detail || 'Monitor 抓取进度保存失败。');
+	          });
+	        }
+	        return response.json();
+	      })
+	      .then(data => {
+	        renderMonitorCheckpoint(data);
+	        showToast('保存成功', 'Monitor 抓取进度已更新。');
+	      })
+	      .catch(error => {
+	        console.error('Failed to update monitor checkpoint:', error);
+	        showToast('保存失败', error.message || '请求未完成，请检查 API 服务。', 'error');
+	      });
+	  }
+
+	  function fetchPauseState(type) {
     fetch(`/zhi/core/${type}/pause`)
       .then(response => response.json())
       .then(data => {
@@ -1012,10 +1091,11 @@
     }
     fetchStatePath();
     fetchGlobalConfigs();
-    refreshConfigs('archiver');
-    refreshConfigs('monitor');
-    fetchPauseState('archiver');
-    fetchPauseState('monitor');
+	    refreshConfigs('archiver');
+	    refreshConfigs('monitor');
+	    fetchMonitorCheckpoint();
+	    fetchPauseState('archiver');
+	    fetchPauseState('monitor');
 
     document.querySelectorAll('[data-refresh]').forEach(btn => {
       btn.addEventListener('click', () => refreshConfigs(btn.getAttribute('data-refresh')));
@@ -1027,10 +1107,12 @@
 
     document.getElementById('statePathSave').addEventListener('click', submitStatePath);
     document.getElementById('statePathRefresh').addEventListener('click', fetchStatePath);
-    document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
-    document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
-    document.getElementById('manualArchiveForm').addEventListener('submit', submitManualArchive);
-  });
+	    document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
+	    document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
+	    document.getElementById('monitorCheckpointSave').addEventListener('click', submitMonitorCheckpoint);
+	    document.getElementById('monitorCheckpointRefresh').addEventListener('click', fetchMonitorCheckpoint);
+	    document.getElementById('manualArchiveForm').addEventListener('submit', submitManualArchive);
+	  });
 </script>
 </body>
 </html>
