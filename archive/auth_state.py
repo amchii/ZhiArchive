@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import pathlib
 import uuid
@@ -94,11 +95,14 @@ def _normalize_expires(cookie: dict[str, Any], index: int) -> float:
     if isinstance(value, bool):
         raise AuthStateValidationError(f"cookies[{index}].expires 必须是数字")
     try:
-        return float(value)
+        expires = float(value)
     except (TypeError, ValueError) as error:
         raise AuthStateValidationError(
             f"cookies[{index}].expires 必须是数字"
         ) from error
+    if not math.isfinite(expires):
+        raise AuthStateValidationError(f"cookies[{index}].expires 必须是有限数字")
+    return expires
 
 
 def _normalize_bool(value: Any, field: str) -> bool:

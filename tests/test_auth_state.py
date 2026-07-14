@@ -42,6 +42,19 @@ def test_normalize_auth_state_rejects_empty_cookies() -> None:
         normalize_auth_state({"cookies": [], "origins": []})
 
 
+@pytest.mark.parametrize(
+    "expires",
+    [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity", "-Infinity"],
+)
+def test_normalize_auth_state_rejects_non_finite_expires(expires: object) -> None:
+    """验证 Cookie 过期时间不能使用 NaN 或正负无穷。"""
+    cookie = make_cookie()
+    cookie["expirationDate"] = expires
+
+    with pytest.raises(AuthStateValidationError, match="expires 必须是有限数字"):
+        normalize_auth_state([cookie])
+
+
 @pytest.mark.asyncio
 async def test_activate_auth_state_writes_managed_file(tmp_path) -> None:
     """验证上传内容原子写入托管位置且状态不暴露敏感内容。"""
