@@ -20,6 +20,7 @@ from playwright.async_api import (
 )
 from playwright_stealth import Stealth
 
+from archive.auth_state import AuthStateManager, AuthStateSource
 from archive.config import default, settings
 from archive.env import user_agent
 from archive.storage import SQLiteStore, get_default_store
@@ -364,6 +365,7 @@ class BaseWorker:
         self.page_default_timeout = page_default_timeout
         self._base_results_dir = base_results_dir or settings.results_dir
         self.sqlite_store = store or get_default_store()
+        self.auth_state = AuthStateManager(self.sqlite_store, self.init_state_path)
         self.interval = interval
         self.logger = logging.getLogger(self.name or "default")
         self.browser_semaphore: asyncio.Semaphore | None = None
@@ -387,22 +389,9 @@ class BaseWorker:
     async def set_status(self, status: WorkStatus):
         return await self.sqlite_store.set_worker_status(self.name, status.value)
 
-    async def get_saved_state_path(self) -> pathlib.Path | None:
-        """
-        读取 SQLite 中保存的 storage state 路径。
-        """
-        return await self.sqlite_store.get_state_path(
-            pathlib.Path(self.init_state_path)
-        )
-
-    async def set_state_path(self, path: str | pathlib.Path):
-        """
-        保存当前使用的 storage state 路径。
-        """
-        await self.sqlite_store.set_state_path(path)
-
-    async def get_state_path(self) -> pathlib.Path | str:
-        return await self.get_saved_state_path() or self.init_state_path
+    async def get_state_path(self) -> pathlib.Path:
+        """返回当前 worker 使用的应用托管 storage state 路径。"""
+        return pathlib.Path(self.init_state_path)
 
     @lru_cache(None)
     def get_configurable(self, filter_: ConfigFilter = ConfigFilter.ALL):
@@ -502,16 +491,31 @@ class BaseWorker:
         **context_extra,
     ):
         state_path = await self.get_state_path()
+        state_revision = await self.auth_state.revision()
         self.logger.info(f"Currently used state path: {state_path}")
         async with get_context(
             playwright,
             state_path,
-            state_auto_save,
+            False,
             browser_headless,
             init=self.init_context,
             **context_extra,
         ) as context:
-            yield context
+            try:
+                yield context
+            finally:
+                if state_auto_save:
+                    payload = await context.storage_state()
+                    updated = await self.auth_state.activate_if_unchanged(
+                        payload,
+                        AuthStateSource.WORKER,
+                        state_revision,
+                    )
+                    if not updated:
+                        self.logger.info(
+                            "Storage state changed while the browser context was open; "
+                            "skip stale context state write-back."
+                        )
 
     async def goto(self, page: Page, url, **kwargs):
         self.logger.info(f"Goto: {url}")

@@ -1,17 +1,20 @@
 import json
-import os
-import pathlib
 from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any
 
-import aiofiles
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, StringConstraints
 
 from archive.api.render import templates
 from archive.api.security import verify_user_from_cookie
+from archive.auth_state import (
+    MAX_AUTH_STATE_BYTES,
+    AuthStateManager,
+    AuthStateSource,
+    AuthStateValidationError,
+)
 from archive.config import settings
 from archive.core.api_client import get_api_client
 from archive.core.archiver import Archiver
@@ -19,8 +22,6 @@ from archive.core.base import BaseWorker, ConfigFilter, TargetType
 from archive.core.monitor import Monitor
 from archive.services import get_current_services
 from archive.storage import SQLiteStore, WorkerBusyError, get_default_store
-
-from .login import get_qrcode_task
 
 router = APIRouter(dependencies=[Depends(verify_user_from_cookie)])
 public_router = APIRouter()
@@ -38,8 +39,13 @@ class WorkerName(str, Enum):
         return str(self.value)
 
 
-class StatePath(BaseModel):
-    path: str
+class AuthStateResponse(BaseModel):
+    configured: bool
+    valid: bool
+    source: str | None
+    updated_at: datetime | None
+    cookie_count: int
+    error: str | None
 
 
 class TestStateResult(BaseModel):
@@ -76,6 +82,40 @@ def get_store() -> SQLiteStore:
     return services.store if services is not None else get_default_store()
 
 
+def get_auth_state_manager() -> AuthStateManager:
+    """获取当前 API 进程使用的托管登录态管理器。"""
+    services = get_current_services()
+    return (
+        services.auth_state if services is not None else AuthStateManager(get_store())
+    )
+
+
+async def read_auth_state_payload(request: Request) -> Any:
+    """读取受大小限制的 JSON state 请求体。"""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_AUTH_STATE_BYTES:
+                raise HTTPException(status_code=413, detail="State 文件不能超过 2 MiB")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Content-Length 无效")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_AUTH_STATE_BYTES:
+            raise HTTPException(status_code=413, detail="State 文件不能超过 2 MiB")
+        chunks.append(chunk)
+    if not chunks:
+        raise HTTPException(status_code=400, detail="State 文件不能为空")
+    try:
+        return json.loads(b"".join(chunks).decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise HTTPException(
+            status_code=422, detail="State 文件不是有效 JSON"
+        ) from error
+
+
 async def get_current_people(store: SQLiteStore) -> str:
     """从 SQLite 全局配置读取当前目标用户。"""
     configs = await store.get_settings("global")
@@ -97,43 +137,45 @@ def get_worker_config_client(name: WorkerName) -> BaseWorker:
     return worker
 
 
-@router.get("/state_path", response_model=StatePath)
-async def get_state_path():
-    client = get_api_client()
-    return {"path": str(await client.get_state_path())}
+@router.get("/auth_state", response_model=AuthStateResponse)
+async def get_auth_state() -> dict[str, Any]:
+    """读取当前托管登录态摘要。"""
+    return await get_auth_state_manager().status()
 
 
-@router.put("/state_path", response_model=StatePath)
-async def set_state_path(state_path: StatePath):
-    client = get_api_client()
-    await client.set_state_path(state_path.path)
-    return {"path": str(await client.get_state_path())}
+@router.put("/auth_state", response_model=AuthStateResponse)
+async def upload_auth_state(request: Request) -> dict[str, Any]:
+    """上传并启用 Playwright state 或浏览器导出的 Cookies JSON。"""
+    payload = await read_auth_state_payload(request)
+    try:
+        return await get_auth_state_manager().activate(
+            payload,
+            AuthStateSource.UPLOAD,
+        )
+    except AuthStateValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.post(
-    "/state_path/test",
-    summary="测试state文件是否有效",
+    "/auth_state/test",
+    summary="测试当前托管 state 是否有效",
     description="会启动浏览器访问知乎进行测试",
     response_model=TestStateResult,
 )
-async def test_state_path(state_path: StatePath):
-    if not pathlib.Path(state_path.path).exists():
-        raise HTTPException(400, "State file not found")
-    worker = BaseWorker()
-    result = await worker.test_state(state_path.path)
-    return result
-
-
-@router.post("/states", summary="新建state文件", response_model=StatePath)
-async def new_state(state: str):
-    try:
-        json.loads(state)
-    except json.JSONDecodeError:
-        raise HTTPException(400, "String must be json-serializable")
-    task = get_qrcode_task(os.urandom(10).hex())
-    async with aiofiles.open(task.state_path, "w", encoding="utf-8") as fp:
-        await fp.write(state)
-    return {"path": str(task.state_path)}
+async def test_auth_state() -> dict[str, Any]:
+    """启动一次交互浏览器验证当前托管登录态。"""
+    manager = get_auth_state_manager()
+    status = await manager.status()
+    if not status["configured"]:
+        raise HTTPException(status_code=400, detail="尚未上传或生成登录状态")
+    if not status["valid"]:
+        raise HTTPException(status_code=422, detail=status["error"])
+    worker = BaseWorker(store=get_store(), init_state_path=manager.path)
+    services = get_current_services()
+    if services is None:
+        return await worker.test_state(manager.path)
+    async with services.interactive_browser_semaphore:
+        return await worker.test_state(manager.path)
 
 
 @router.put("/{name}/pause", response_model=PauseStatus)

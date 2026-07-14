@@ -16,10 +16,7 @@ public_router = APIRouter()
 
 
 def get_qrcode_task(prefix: str) -> QRCodeTask:
-    return QRCodeTask(
-        settings.states_dir.joinpath(f"{prefix}.qrcode.png"),
-        settings.states_dir.joinpath(f"{prefix}.state.json"),
-    )
+    return QRCodeTask(settings.states_dir.joinpath(f"{prefix}.qrcode.png"))
 
 
 def get_task_prefix(task: QRCodeTask) -> str:
@@ -34,11 +31,6 @@ class QRCodeScanStatusResponse(BaseModel):
     status: QRCodeTaskStatus
 
 
-class QRCodeInfo(BaseModel):
-    qrcode_path: str
-    state_path: str
-
-
 @public_router.get("", response_class=HTMLResponse, name="zhi:login_view")
 async def login_view(request: Request):
     return templates.TemplateResponse(
@@ -48,12 +40,6 @@ async def login_view(request: Request):
             "redirect_url": str(request.url_for("index")),
         },
     )
-
-
-@router.get("/qrcode/{prefix}/info", response_model=QRCodeInfo)
-async def qrcode_info(prefix: str):
-    task = get_qrcode_task(prefix)
-    return {"qrcode_path": str(task.qrcode_path), "state_path": str(task.state_path)}
 
 
 @router.get("/qrcode/new", response_model=QRCodeTaskResponse)
@@ -86,21 +72,3 @@ async def qrcode_scan_status(prefix: str):
     client = ZhiLoginClient()
     status = await client.get_qrcode_task_status(qrcode_task.task_name)
     return {"status": status}
-
-
-@router.get("/state/{prefix}", response_class=FileResponse)
-async def login_state(prefix: str):
-    qrcode_task = get_qrcode_task(prefix)
-    if not qrcode_task.state_path.exists():
-        raise HTTPException(status_code=404)
-    return FileResponse(qrcode_task.state_path)
-
-
-@router.post("/state/{prefix}/use")
-async def use_state(prefix: str) -> str:
-    qrcode_task = get_qrcode_task(prefix)
-    client = ZhiLoginClient()
-    await client.store.set_state_path(qrcode_task.state_path)
-    return str(
-        await client.store.get_state_path(settings.states_dir / "zhihu.state.json")
-    )

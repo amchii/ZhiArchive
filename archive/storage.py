@@ -12,7 +12,7 @@ from archive.config import settings
 from archive.utils.common import dt_fromisoformat, dt_toisoformat
 from archive.utils.encoder import JSONEncoder
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TASK_RETRY_DELAYS = [timedelta(seconds=30), timedelta(minutes=5)]
 MAX_TASK_ATTEMPTS = 3
 ActivityItem = dict[str, Any]
@@ -136,6 +136,8 @@ class SQLiteStore:
             await self._create_schema(db)
             await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             await db.commit()
+        elif version < SCHEMA_VERSION:
+            await self._migrate_schema(db, version)
 
     async def _connection_without_init(self) -> aiosqlite.Connection:
         """返回内部连接，供 schema 初始化阶段使用。"""
@@ -143,7 +145,7 @@ class SQLiteStore:
         return self._db
 
     async def _create_schema(self, db: aiosqlite.Connection) -> None:
-        """创建第一版数据表。"""
+        """创建当前版本的数据表。"""
         await db.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -186,7 +188,6 @@ class SQLiteStore:
             CREATE TABLE IF NOT EXISTS login_tasks (
                 id TEXT PRIMARY KEY,
                 qrcode_path TEXT NOT NULL,
-                state_path TEXT NOT NULL,
                 status TEXT NOT NULL,
                 last_error TEXT,
                 created_at TEXT NOT NULL,
@@ -195,10 +196,53 @@ class SQLiteStore:
             """
         )
 
+    async def _migrate_schema(
+        self,
+        db: aiosqlite.Connection,
+        version: int,
+    ) -> None:
+        """按版本顺序迁移既有 SQLite schema。
+
+        Args:
+            db: 当前 SQLite 连接。
+            version: 数据库当前 schema 版本。
+        """
+        if version != 1:
+            raise RuntimeError(f"Unsupported SQLite schema version: {version}")
+        await db.execute("BEGIN IMMEDIATE")
+        try:
+            await db.execute(
+                """
+                CREATE TABLE login_tasks_v2 (
+                    id TEXT PRIMARY KEY,
+                    qrcode_path TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
+                )
+                """
+            )
+            await db.execute(
+                """
+                INSERT INTO login_tasks_v2
+                    (id, qrcode_path, status, last_error, created_at, expires_at)
+                SELECT id, qrcode_path, status, last_error, created_at, expires_at
+                FROM login_tasks
+                """
+            )
+            await db.execute("DROP TABLE login_tasks")
+            await db.execute("ALTER TABLE login_tasks_v2 RENAME TO login_tasks")
+            await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        except BaseException:
+            await db.rollback()
+            raise
+        else:
+            await db.commit()
+
     async def seed_defaults(self) -> None:
         """首次建库时写入运行时默认配置和 worker 控制行。"""
         now = utcnow_iso()
-        default_state_path = settings.states_dir.joinpath("zhihu.state.json")
         async with self.transaction() as db:
             await db.execute(
                 """
@@ -206,17 +250,6 @@ class SQLiteStore:
                 VALUES (?, ?, ?)
                 """,
                 ("global:people", json.dumps(settings.people, cls=JSONEncoder), now),
-            )
-            await db.execute(
-                """
-                INSERT OR IGNORE INTO settings(key, value, updated_at)
-                VALUES (?, ?, ?)
-                """,
-                (
-                    "global:state_path",
-                    json.dumps(str(default_state_path), cls=JSONEncoder),
-                    now,
-                ),
             )
             for name in ("monitor", "archiver"):
                 await db.execute(
@@ -263,14 +296,22 @@ class SQLiteStore:
                     ),
                 )
 
-    async def get_state_path(self, default_path: pathlib.Path) -> pathlib.Path:
-        """读取当前 Playwright storage state 路径。"""
-        values = await self.get_settings("global")
-        return pathlib.Path(values.get("state_path") or default_path)
+    async def delete_settings(self, prefix: str, keys: list[str]) -> None:
+        """删除指定前缀下的一组配置值。
 
-    async def set_state_path(self, path: str | pathlib.Path) -> None:
-        """保存当前 Playwright storage state 路径。"""
-        await self.set_settings("global", {"state_path": str(path)})
+        Args:
+            prefix: 配置键前缀。
+            keys: 需要删除的配置项名称。
+        """
+        if not keys:
+            return
+        placeholders = ", ".join("?" for _ in keys)
+        values = [f"{prefix}:{key}" for key in keys]
+        async with self.transaction() as db:
+            await db.execute(
+                f"DELETE FROM settings WHERE key IN ({placeholders})",  # noqa: S608
+                values,
+            )
 
     async def set_worker_status(
         self,
@@ -641,7 +682,6 @@ class SQLiteStore:
         self,
         task_id: str,
         qrcode_path: pathlib.Path,
-        state_path: pathlib.Path,
         expires_at: datetime,
     ) -> dict[str, Any]:
         """创建二维码登录任务，若已有活跃任务则返回既有任务。"""
@@ -660,7 +700,7 @@ class SQLiteStore:
             row = await (
                 await db.execute(
                     """
-                    SELECT id, qrcode_path, state_path, status
+                    SELECT id, qrcode_path, status
                     FROM login_tasks
                     WHERE status IN ('pending', 'waiting_for_scan')
                     ORDER BY created_at
@@ -673,13 +713,12 @@ class SQLiteStore:
             await db.execute(
                 """
                 INSERT INTO login_tasks
-                    (id, qrcode_path, state_path, status, created_at, expires_at)
-                VALUES (?, ?, ?, 'pending', ?, ?)
+                    (id, qrcode_path, status, created_at, expires_at)
+                VALUES (?, ?, 'pending', ?, ?)
                 """,
                 (
                     task_id,
                     str(qrcode_path),
-                    str(state_path),
                     now,
                     expires_at.isoformat(timespec="seconds"),
                 ),
@@ -687,7 +726,6 @@ class SQLiteStore:
         return {
             "id": task_id,
             "qrcode_path": str(qrcode_path),
-            "state_path": str(state_path),
             "status": "pending",
         }
 
@@ -697,7 +735,7 @@ class SQLiteStore:
         row = await (
             await db.execute(
                 """
-                SELECT id, qrcode_path, state_path, status, last_error
+                SELECT id, qrcode_path, status, last_error
                 FROM login_tasks
                 WHERE id = ?
                 """,

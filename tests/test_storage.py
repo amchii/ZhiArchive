@@ -1,3 +1,4 @@
+import sqlite3
 from datetime import datetime, timedelta
 
 import pytest
@@ -25,6 +26,53 @@ def make_item(item_id: str, link: str | None = None) -> ActivityItem:
         ),
         people="someone",
     )
+
+
+@pytest.mark.asyncio
+async def test_schema_v1_removes_login_task_state_path(tmp_path) -> None:
+    """验证 v1 数据库升级后移除登录任务中的废弃绝对路径。"""
+    database_path = tmp_path / "zhi.sqlite3"
+    with sqlite3.connect(database_path) as database:
+        database.executescript(
+            """
+            CREATE TABLE login_tasks (
+                id TEXT PRIMARY KEY,
+                qrcode_path TEXT NOT NULL,
+                state_path TEXT NOT NULL,
+                status TEXT NOT NULL,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            );
+            INSERT INTO login_tasks
+                (id, qrcode_path, state_path, status, created_at, expires_at)
+            VALUES
+                ('login-id', '/tmp/code.png', '/host/state.json', 'failed',
+                 '2026-07-15T08:00:00', '2026-07-15T08:05:00');
+            PRAGMA user_version=1;
+            """
+        )
+    store = SQLiteStore(database_path)
+
+    await store.connect()
+    connection = await store._connection()
+    columns_cursor = await connection.execute("PRAGMA table_info(login_tasks)")
+    columns = await columns_cursor.fetchall()
+    row = await (
+        await connection.execute(
+            "SELECT id, qrcode_path, status FROM login_tasks WHERE id = 'login-id'"
+        )
+    ).fetchone()
+    version = await (await connection.execute("PRAGMA user_version")).fetchone()
+
+    assert "state_path" not in {column["name"] for column in columns}
+    assert dict(row) == {
+        "id": "login-id",
+        "qrcode_path": "/tmp/code.png",
+        "status": "failed",
+    }
+    assert version[0] == 2
+    await store.close()
 
 
 @pytest.mark.asyncio
@@ -108,7 +156,6 @@ async def test_login_tasks_fail_on_restart(tmp_path) -> None:
     await store.create_login_task(
         "login-id",
         tmp_path / "login.qrcode.png",
-        tmp_path / "login.state.json",
         datetime.now() + timedelta(minutes=5),
     )
 
@@ -127,14 +174,12 @@ async def test_create_login_task_reuses_active_task(tmp_path) -> None:
     first = await store.create_login_task(
         "first",
         tmp_path / "first.qrcode.png",
-        tmp_path / "first.state.json",
         expires_at,
     )
 
     second = await store.create_login_task(
         "second",
         tmp_path / "second.qrcode.png",
-        tmp_path / "second.state.json",
         expires_at,
     )
 

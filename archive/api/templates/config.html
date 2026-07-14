@@ -128,6 +128,26 @@
         }
 
         @media (max-width: 760px) {
+            header {
+                align-items: stretch;
+                flex-direction: column;
+            }
+
+            .header-actions {
+                display: grid;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+                width: 100%;
+            }
+
+            .header-actions .pill {
+                grid-column: 1 / -1;
+                justify-content: center;
+            }
+
+            .header-actions button {
+                width: 100%;
+            }
+
             .summary-grid,
             .worker-grid {
                 grid-template-columns: 1fr;
@@ -202,6 +222,26 @@
             border-color: rgba(45, 212, 191, 0.6);
             box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.08);
             background: rgba(255, 255, 255, 0.06);
+        }
+
+        input[type=file] {
+            width: 100%;
+            padding: 8px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        input[type=file]::file-selector-button {
+            margin-right: 12px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text);
+            cursor: pointer;
         }
 
         select {
@@ -344,6 +384,24 @@
             font-size: 16px;
         }
 
+        .state-meta {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .state-error {
+            margin: 0;
+            color: #fecdd3;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .state-error[hidden] {
+            display: none;
+        }
+
         .badge-success {
             background: rgba(45, 212, 191, 0.12);
             border: 1px solid rgba(45, 212, 191, 0.4);
@@ -411,7 +469,7 @@
         <div class="title">
             <p class="eyebrow">Console</p>
             <h1>配置与运行控制</h1>
-            <p>管理知乎 Cookies 路径、Archiver/Monitor 配置以及运行状态。</p>
+            <p>管理知乎登录状态、Archiver/Monitor 配置以及运行状态。</p>
         </div>
         <div class="header-actions">
             <div class="pill">实时 API 更新</div>
@@ -447,17 +505,26 @@
             <div class="card-header">
                 <div>
                     <p class="eyebrow">Core</p>
-                    <h2>知乎 Cookies 路径</h2>
+                    <h2>知乎登录状态</h2>
                 </div>
-                <div class="pill">路径配置</div>
+                <div class="pill badge-warning" id="authStateBadge">读取中</div>
             </div>
+            <div class="status-row">
+                <div>
+                    <strong id="authStateTitle">正在读取登录状态</strong>
+                    <p class="state-meta" id="authStateMeta">--</p>
+                </div>
+            </div>
+            <p class="state-error" id="authStateError" hidden></p>
             <div class="inputs">
-                <label for="statePath">文件路径</label>
-                <input type="text" id="statePath" placeholder="请输入 cookies.json 路径">
+                <label for="authStateFile">导入 Playwright state 或 Cookies JSON</label>
+                <input type="file" id="authStateFile" accept=".json,application/json">
+                <p class="field-help">上传后由应用托管，下一次创建浏览器上下文时生效。</p>
             </div>
             <div class="actions">
-                <button class="ghost" id="statePathRefresh" type="button">刷新</button>
-                <button class="primary" id="statePathSave" type="button">保存</button>
+                <button class="ghost" id="authStateRefresh" type="button">刷新</button>
+                <button class="ghost" id="authStateTest" type="button" disabled>验证登录</button>
+                <button class="primary" id="authStateUpload" type="button" disabled>上传并启用</button>
             </div>
         </div>
         <div class="card">
@@ -635,36 +702,123 @@
     return false;
   }
 
-  function fetchStatePath() {
-    fetch('/zhi/core/state_path')
-      .then(response => response.json())
-      .then(data => {
-        document.getElementById('statePath').value = data.path;
-      })
-      .catch(error => console.error('Failed to fetch state path:', error));
+  const authStateSourceLabels = {
+    upload: '手动上传',
+    qrcode: '二维码登录',
+    worker: 'Worker 自动刷新',
+    legacy: '旧配置迁移',
+    external: '外部文件'
+  };
+
+  function renderAuthState(data) {
+    const badge = document.getElementById('authStateBadge');
+    const title = document.getElementById('authStateTitle');
+    const meta = document.getElementById('authStateMeta');
+    const error = document.getElementById('authStateError');
+    const testButton = document.getElementById('authStateTest');
+    badge.classList.toggle('badge-success', data.configured && data.valid);
+    badge.classList.toggle('badge-warning', !data.configured || !data.valid);
+    if (!data.configured) {
+      badge.textContent = '未配置';
+      title.textContent = '尚未配置知乎登录状态';
+      meta.textContent = '可扫码登录，或上传已有 State 文件。';
+    } else if (!data.valid) {
+      badge.textContent = '格式错误';
+      title.textContent = '当前 State 无法使用';
+      meta.textContent = data.updated_at
+        ? `文件更新时间：${new Date(data.updated_at).toLocaleString()}`
+        : '--';
+    } else {
+      badge.textContent = '已配置';
+      title.textContent = `已载入 ${data.cookie_count} 个 Cookie`;
+      const source = authStateSourceLabels[data.source] || data.source || '未知来源';
+      const updatedAt = data.updated_at
+        ? new Date(data.updated_at).toLocaleString()
+        : '--';
+      meta.textContent = `来源：${source} · 更新时间：${updatedAt}`;
+    }
+    error.textContent = data.error || '';
+    error.hidden = !data.error;
+    testButton.dataset.available = data.configured && data.valid ? 'true' : 'false';
+    testButton.disabled = testButton.dataset.available !== 'true';
   }
 
-  function submitStatePath() {
-    const path = document.getElementById('statePath').value;
+  async function fetchAuthState() {
+    try {
+      const response = await fetch('/zhi/core/auth_state');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '登录状态读取失败。');
+      }
+      renderAuthState(data);
+    } catch (error) {
+      console.error('Failed to fetch auth state:', error);
+      showToast('读取失败', error.message || '无法读取知乎登录状态。', 'error');
+    }
+  }
 
-    fetch('/zhi/core/state_path', {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({path: path})
-    })
-      .then(response => {
-        if (response.ok) {
-          showToast('保存成功', '知乎 Cookies 路径已更新。');
-        } else {
-          showToast('保存失败', '知乎 Cookies 路径更新失败。', 'error');
-        }
-      })
-      .catch(error => {
-        console.error('Failed to update state path:', error);
-        showToast('保存失败', '请求未完成，请检查 API 服务或网络。', 'error');
+  async function uploadAuthState() {
+    const input = document.getElementById('authStateFile');
+    const button = document.getElementById('authStateUpload');
+    const file = input.files[0];
+    if (!file) {
+      showToast('上传失败', '请先选择 JSON 文件。', 'error');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('上传失败', 'State 文件不能超过 2 MiB。', 'error');
+      return;
+    }
+    button.disabled = true;
+    button.textContent = '正在上传...';
+    try {
+      const content = await file.text();
+      try {
+        JSON.parse(content);
+      } catch (error) {
+        throw new Error('State 文件不是有效 JSON。');
+      }
+      const response = await fetch('/zhi/core/auth_state', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: content
       });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'State 文件上传失败。');
+      }
+      renderAuthState(data);
+      input.value = '';
+      showToast('上传成功', '新的知乎登录状态已启用。');
+    } catch (error) {
+      showToast('上传失败', error.message || 'State 文件不是有效 JSON。', 'error');
+    } finally {
+      button.disabled = !input.files.length;
+      button.textContent = '上传并启用';
+    }
+  }
+
+  async function testAuthState() {
+    const button = document.getElementById('authStateTest');
+    button.disabled = true;
+    button.textContent = '验证中...';
+    try {
+      const response = await fetch('/zhi/core/auth_state/test', {method: 'POST'});
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || '登录状态验证失败。');
+      }
+      showToast(
+        data.ok ? '验证通过' : '登录已失效',
+        data.ok ? '知乎当前仍处于登录状态。' : '请重新上传 State 或扫码登录。',
+        data.ok ? 'success' : 'error'
+      );
+    } catch (error) {
+      showToast('验证失败', error.message || '请求未完成，请检查 API 服务。', 'error');
+    } finally {
+      button.disabled = button.dataset.available !== 'true';
+      button.textContent = '验证登录';
+    }
   }
 
   function fetchGlobalConfigs() {
@@ -1089,13 +1243,13 @@
     if (!authed) {
       return;
     }
-    fetchStatePath();
+    fetchAuthState();
     fetchGlobalConfigs();
-	    refreshConfigs('archiver');
-	    refreshConfigs('monitor');
-	    fetchMonitorCheckpoint();
-	    fetchPauseState('archiver');
-	    fetchPauseState('monitor');
+    refreshConfigs('archiver');
+    refreshConfigs('monitor');
+    fetchMonitorCheckpoint();
+    fetchPauseState('archiver');
+    fetchPauseState('monitor');
 
     document.querySelectorAll('[data-refresh]').forEach(btn => {
       btn.addEventListener('click', () => refreshConfigs(btn.getAttribute('data-refresh')));
@@ -1105,14 +1259,18 @@
       btn.addEventListener('click', () => togglePause(btn.getAttribute('data-toggle')));
     });
 
-    document.getElementById('statePathSave').addEventListener('click', submitStatePath);
-    document.getElementById('statePathRefresh').addEventListener('click', fetchStatePath);
-	    document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
-	    document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
-	    document.getElementById('monitorCheckpointSave').addEventListener('click', submitMonitorCheckpoint);
-	    document.getElementById('monitorCheckpointRefresh').addEventListener('click', fetchMonitorCheckpoint);
-	    document.getElementById('manualArchiveForm').addEventListener('submit', submitManualArchive);
-	  });
+    document.getElementById('authStateRefresh').addEventListener('click', fetchAuthState);
+    document.getElementById('authStateTest').addEventListener('click', testAuthState);
+    document.getElementById('authStateUpload').addEventListener('click', uploadAuthState);
+    document.getElementById('authStateFile').addEventListener('change', event => {
+      document.getElementById('authStateUpload').disabled = !event.target.files.length;
+    });
+    document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
+    document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
+    document.getElementById('monitorCheckpointSave').addEventListener('click', submitMonitorCheckpoint);
+    document.getElementById('monitorCheckpointRefresh').addEventListener('click', fetchMonitorCheckpoint);
+    document.getElementById('manualArchiveForm').addEventListener('submit', submitManualArchive);
+  });
 </script>
 </body>
 </html>

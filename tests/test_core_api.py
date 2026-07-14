@@ -1,13 +1,70 @@
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from archive.api.endpoints.zhi import core
+from archive.auth_state import AuthStateManager
 from archive.core.base import TargetType, WorkStatus
 from archive.core.monitor import Monitor
 from archive.storage import SQLiteStore
+
+
+def make_json_request(payload: object) -> Request:
+    """构造可直接传给端点函数的 JSON Request。"""
+    body = json.dumps(payload).encode()
+    sent = False
+
+    async def receive() -> dict[str, object]:
+        """向 Starlette Request 提供一次请求体消息。"""
+        nonlocal sent
+        if sent:
+            return {"type": "http.disconnect"}
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "PUT",
+            "path": "/zhi/core/auth_state",
+            "headers": [(b"content-length", str(len(body)).encode())],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_auth_state_returns_summary_without_server_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证上传接口启用 state 后只返回非敏感摘要。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    manager = AuthStateManager(store, tmp_path / "states/zhihu.state.json")
+    monkeypatch.setattr(core, "get_auth_state_manager", lambda: manager)
+    request = make_json_request(
+        [
+            {
+                "name": "z_c0",
+                "value": "secret",
+                "domain": ".zhihu.com",
+                "path": "/",
+            }
+        ]
+    )
+
+    result = await core.upload_auth_state(request)
+
+    assert result["source"] == "upload"
+    assert result["cookie_count"] == 1
+    assert "path" not in result
+    assert "cookies" not in result
+    await store.close()
 
 
 @pytest.mark.asyncio

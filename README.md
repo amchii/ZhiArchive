@@ -248,11 +248,10 @@ http://127.0.0.1:9090/zhi/core/config
 2. 点击获取二维码按钮，使用知乎 App 扫码登录。
 3. 登录成功后返回配置页。
 4. 在“目标用户”中填写知乎用户 ID。
-5. 确认 Cookie state 路径。
-6. 配置 monitor 和 archiver 参数。
-7. 在“运行状态”中切换后台任务状态。
+5. 配置 monitor 和 archiver 参数。
+6. 在“运行状态”中切换后台任务状态。
 
-如果已有可用的 Playwright storage state 文件，也可以直接在配置页设置 state 文件路径，不必重新扫码。
+如果已有可用的 Playwright storage state 文件，或从浏览器扩展导出的 Cookies JSON，也可以在配置页直接上传并启用，不必重新扫码。应用会把登录态写入 `states/zhihu.state.json`；Docker 部署时该文件通过 `states/` 挂载持久化，配置页不会暴露或保存容器内部路径。
 
 登录二维码页面示例：
 

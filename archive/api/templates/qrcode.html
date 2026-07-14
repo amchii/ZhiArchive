@@ -320,16 +320,12 @@
       imageTimer = setInterval(tryLoad, 700);
     }
 
-    async function handleScanSuccess(prefix) {
+    function handleScanSuccess() {
       clearInterval(scanTimer);
-      setStatus('扫码成功，正在写入登录状态...', '请勿关闭页面，稍后将自动跳转。');
-      try {
-        await fetch(`/zhi/login/state/${prefix}/use`, {method: 'POST'});
-      } catch (error) {
-        console.error(error);
-      } finally {
+      setStatus('扫码成功，登录状态已启用', '稍后将自动返回配置页。');
+      window.setTimeout(() => {
         window.location.href = redirectUrl;
-      }
+      }, 500);
     }
 
     async function pollStatus(prefix) {
@@ -343,7 +339,7 @@
           const data = await response.json();
           switch (data.status) {
             case 'ok':
-              await handleScanSuccess(prefix);
+              handleScanSuccess();
               return;
             case 'failed':
               clearInterval(scanTimer);

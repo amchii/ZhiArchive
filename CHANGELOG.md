@@ -6,7 +6,13 @@
 
 - 移除 Redis 和独立 worker 部署，改为单个 FastAPI 进程通过 lifespan 启动 monitor、archiver 和按需二维码登录任务。
 - 运行时配置、暂停状态、抓取检查点、登录任务和归档任务队列改为保存到本地 SQLite，默认路径为 `var/zhi_archive.sqlite3`。
+- 移除可编辑的 `global:state_path` 和登录任务中的临时 state 路径；已有可访问的旧 state 会在 SQLite schema v2 升级时迁移到托管文件。
 - 本版本不提供 Redis 到 SQLite 的自动迁移工具；已有 Redis 数据需要手动迁移或以全新部署方式使用。
+
+### 改进
+
+- 知乎登录态改为应用托管的固定 state 文件；控制台支持上传 Playwright state 或浏览器 Cookies JSON，不再要求用户填写运行环境绝对路径。
+- Worker 回写 storage state 时增加修订检查，避免运行中的旧浏览器上下文覆盖用户刚上传的新登录态。
 
 ## 26.7.0 - 2026-07-09
 

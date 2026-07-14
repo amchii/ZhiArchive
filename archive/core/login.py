@@ -13,6 +13,7 @@ from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
 
+from archive.auth_state import AuthStateManager, AuthStateSource
 from archive.config import settings
 from archive.env import user_agent
 from archive.storage import SQLiteStore, get_default_store
@@ -44,9 +45,9 @@ class QRCodeTaskStatus(str, Enum):
 
 
 class QRCodeTask:
-    def __init__(self, qrcode_path, state_path):
+    def __init__(self, qrcode_path: pathlib.Path | str) -> None:
+        """创建只持有二维码文件位置的登录任务。"""
         self.qrcode_path = pathlib.Path(qrcode_path).resolve()
-        self.state_path = pathlib.Path(state_path).resolve()
 
     @property
     def id(self) -> str:
@@ -55,18 +56,12 @@ class QRCodeTask:
 
     @property
     def task_name(self) -> str:
+        """返回兼容调用方命名的登录任务 ID。"""
         return self.id
 
-    def as_value(self) -> str:
-        return f"{self.qrcode_path}:{self.state_path}"
-
-    @classmethod
-    def from_value(cls, v: str) -> "QRCodeTask":
-        qrcode_path, state_path = v.rsplit(":", maxsplit=1)
-        return cls(qrcode_path, state_path)
-
-    def __str__(self):
-        return f"{self.__class__.__name__}<{self.as_value()}>"
+    def __str__(self) -> str:
+        """返回适合日志记录的二维码任务文本。"""
+        return f"{self.__class__.__name__}<{self.qrcode_path}>"
 
     __repr__ = __str__
 
@@ -90,10 +85,9 @@ class Base:
         row = await self.store.create_login_task(
             task.id,
             task.qrcode_path,
-            task.state_path,
             datetime.now() + timedelta(seconds=self.task_timeout),
         )
-        return QRCodeTask(row["qrcode_path"], row["state_path"])
+        return QRCodeTask(row["qrcode_path"])
 
     async def get_qrcode_task_status(self, task_name: str) -> QRCodeTaskStatus:
         """
@@ -131,16 +125,19 @@ class ZhiLogin(Base):
         self,
         scan_timeout: int = 1000 * 60 * 3,
         store: SQLiteStore | None = None,
+        auth_state: AuthStateManager | None = None,
         headless=True,
         **context_extra,
     ):
         super().__init__(store=store)
+        self.auth_state = auth_state or AuthStateManager(self.store)
         self.scan_timeout = scan_timeout
         self.headless = headless
         context_extra.setdefault("user_agent", user_agent)
         self.context_extra = context_extra
 
-    async def _wait_for_login_success(self, page: Page, task_key: str):
+    async def _wait_for_login_success(self, page: Page, task_key: str) -> bool:
+        """等待扫码完成，并返回是否成功进入知乎首页。"""
         logger.info(f"等待扫码登录: {task_key}")
         try:
             await self.set_qrcode_task_status(
@@ -148,10 +145,11 @@ class ZhiLogin(Base):
             )
             await page.wait_for_url(at_home, timeout=self.scan_timeout)
             logger.info(f"登录成功: {task_key}")
-            await self.set_qrcode_task_status(task_key, QRCodeTaskStatus.OK)
+            return True
         except PlaywrightTimeoutError:
             logger.info(f"登录超时: {task_key}")
             await self.set_qrcode_task_status(task_key, QRCodeTaskStatus.FAILED)
+            return False
         finally:
             await page.close()
 
@@ -184,9 +182,19 @@ class ZhiLogin(Base):
                 _ = await self._wait_qrcode(page)
                 img_bytes = await self._wait_qrcode(page, qrcode_task.qrcode_path)
 
-                await self._wait_for_login_success(page, qrcode_task.task_name)
-                await context.storage_state(path=qrcode_task.state_path)
-                logger.info(f"保存登录状态: {qrcode_task.state_path}")
+                logged_in = await self._wait_for_login_success(
+                    page,
+                    qrcode_task.task_name,
+                )
+                if not logged_in:
+                    return img_bytes
+                state = await context.storage_state()
+                await self.auth_state.activate(state, AuthStateSource.QRCODE)
+                await self.set_qrcode_task_status(
+                    qrcode_task.task_name,
+                    QRCodeTaskStatus.OK,
+                )
+                logger.info("二维码登录状态已写入托管 state")
                 return img_bytes
         finally:
             await browser.close()

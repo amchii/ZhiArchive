@@ -7,6 +7,7 @@ from typing import Any
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
+from archive.auth_state import AuthStateManager
 from archive.config import settings
 from archive.core.archiver import Archiver
 from archive.core.base import WorkStatus
@@ -27,6 +28,7 @@ class AppServices:
             store: 可注入的 SQLite store，默认使用配置中的数据库路径。
         """
         self.store = store or SQLiteStore()
+        self.auth_state = AuthStateManager(self.store)
         self.archive_event = asyncio.Event()
         self.worker_browser_semaphore = asyncio.Semaphore(1)
         self.interactive_browser_semaphore = asyncio.Semaphore(1)
@@ -45,6 +47,7 @@ class AppServices:
         """初始化 SQLite 并启动受监督的后台任务。"""
         await self.store.connect()
         await self.store.seed_defaults()
+        await self.auth_state.migrate_legacy_path()
         await self.store.recover_running_archive_tasks()
         await self.store.fail_incomplete_login_tasks()
         logger.warning(
@@ -118,10 +121,9 @@ class AppServices:
         row = await self.store.create_login_task(
             task.id,
             task.qrcode_path,
-            task.state_path,
             expires_at,
         )
-        active_task = QRCodeTask(row["qrcode_path"], row["state_path"])
+        active_task = QRCodeTask(row["qrcode_path"])
         if active_task.id != task.id:
             return active_task
         if self.login_task is not None and not self.login_task.done():
@@ -137,6 +139,7 @@ class AppServices:
         login = ZhiLogin(
             headless=settings.login_worker_headless,
             store=self.store,
+            auth_state=self.auth_state,
         )
         try:
             async with self.interactive_browser_semaphore:
@@ -175,7 +178,4 @@ def get_current_services() -> AppServices | None:
 def new_qrcode_task() -> QRCodeTask:
     """创建新的二维码登录任务路径。"""
     prefix = os.urandom(10).hex()
-    return QRCodeTask(
-        settings.states_dir.joinpath(f"{prefix}.qrcode.png"),
-        settings.states_dir.joinpath(f"{prefix}.state.json"),
-    )
+    return QRCodeTask(settings.states_dir.joinpath(f"{prefix}.qrcode.png"))

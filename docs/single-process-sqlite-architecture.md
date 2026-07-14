@@ -129,7 +129,7 @@ API 路由直接访问 `AppServices`，不再为每个请求构造临时 Worker 
 Monitor 保留定时循环：
 
 1. 等待暂停状态解除；
-2. 从 SQLite 读取最新配置和 state 路径；
+2. 从 SQLite 读取最新配置，并使用应用托管的固定 state 文件；
 3. 抓取知乎动态；
 4. 使用临时文件和原子重命名保存 activities 结果；
 5. 在一个 SQLite 事务中写入逐条归档任务并推进抓取检查点；
@@ -169,7 +169,7 @@ Login 不再作为永久轮询 Worker 运行。创建二维码的 API 直接发�
 2. 写入 login task；
 3. 使用 `asyncio.create_task` 启动二维码生成和扫码等待流程；
 4. 将状态更新为 `pending`、`waiting_for_scan`、`ok` 或 `failed`；
-5. API 继续通过任务 ID 查询状态和读取二维码文件。
+5. 登录成功后原子替换托管 state，API 继续通过任务 ID 查询状态和读取二维码文件。
 
 应用重启后，无需恢复等待扫码的浏览器页面；未结束的登录任务直接标记为失败，用户重新获取二维码。
 
@@ -190,7 +190,7 @@ Login 不再作为永久轮询 Worker 运行。创建二维码的 API 直接发�
 - 全局目标用户；
 - monitor 的执行间隔、页面超时和保存类型；
 - archiver 的页面超时、保存类型和截图最大高度；
-- 当前 storage state 路径。
+- 托管 storage state 的来源和内容修订值；state 文件本身保存在 `states/`。
 
 配置来源按以下规则分层：
 
@@ -268,7 +268,6 @@ Monitor 每次抓取可以产生多条独立任务。某一条内容失败只影
 | --- | --- |
 | `id` | 登录任务 ID，主键 |
 | `qrcode_path` | 二维码文件路径 |
-| `state_path` | 登录成功后保存的 state 文件路径 |
 | `status` | 登录任务状态 |
 | `last_error` | 最近一次错误，可为空 |
 | `created_at` | 创建时间 |
@@ -387,7 +386,7 @@ uvicorn archive.api.app:app --host 0.0.0.0 --port 9090 --workers 1
 
 1. 增加 SQLite schema、store 和单元测试；
 2. 明确部署配置与运行时配置的字段映射；
-3. 将配置、暂停状态、state 路径和 monitor checkpoint 迁入 SQLite；
+3. 将配置、暂停状态和 monitor checkpoint 迁入 SQLite，并将登录态改为固定托管文件；
 4. 将归档任务改为逐条 payload 入库，并补充失败恢复测试；
 5. 将 login 改为按需后台任务；
 6. 引入 `AppServices`、后台任务监督和 FastAPI lifespan；
