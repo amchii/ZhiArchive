@@ -149,10 +149,75 @@ uv pip compile pyproject.toml -o requirements.txt
 
 ## Docker
 
+### 一键安装
+
+安装脚本会检查 Git、Docker 和 Docker Compose，自动 clone（尚未在仓库内时）、
+创建运行目录、生成随机 `secret_key`、构建镜像，并启动 API、Redis 和全部 worker。
+脚本不会覆盖已有的 `.env`。
+
+通过 GitHub 安装（Linux、macOS 或 WSL）：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/amchii/ZhiArchive/main/install.sh | bash
+```
+
+使用国内软件源构建镜像，或指定安装目录：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/amchii/ZhiArchive/main/install.sh \
+  | bash -s -- --cn --dir /path/to/ZhiArchive
+```
+
+通过 GitHub 安装（Windows PowerShell，需要 Docker Desktop 使用 Linux 容器）：
+
+```powershell
+irm https://raw.githubusercontent.com/amchii/ZhiArchive/main/install.ps1 | iex
+```
+
+如果访问 GitHub 困难，可以从 Gitee 获取脚本并从 Gitee clone。下面的命令也会使用
+`CN.Dockerfile` 中配置的国内软件源：
+
+```sh
+curl -fsSL https://raw.giteeusercontent.com/amchii/ZhiArchive/raw/main/install.sh \
+  | bash -s -- --gitee --cn
+```
+
+Windows PowerShell：
+
+```powershell
+$installer = irm https://raw.giteeusercontent.com/amchii/ZhiArchive/raw/main/install.ps1
+& ([scriptblock]::Create($installer)) -Gitee -ChinaMirror
+```
+
+也可以先 clone，再在仓库内运行 `bash install.sh` 或
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`。使用 `--no-start`（PowerShell
+中为 `-NoStart`）可以只完成初始化和镜像构建。Unix 脚本的 `--gitee` 和
+PowerShell 脚本的 `-Gitee` 会将 clone 地址切换到 Gitee；显式传入 `--repo`、
+`-Repository` 或 `ZHIARCHIVE_REPOSITORY` 时，自定义地址优先。完整参数可运行
+`bash install.sh --help` 或 `Get-Help .\install.ps1 -Detailed` 查看。
+
+安装完成后打开：
+
+```text
+http://127.0.0.1:9090/zhi/core/config
+```
+
+> 一键安装沿用 `docker-compose.yaml` 的端口配置。部署到公网前，请配置
+> `.apienv` 鉴权、防火墙或反向代理，不要直接暴露未鉴权的控制台和 Redis。
+
+### 手动安装
+
 下载项目：
 
 ```sh
 git clone https://github.com/amchii/ZhiArchive.git
+cd ZhiArchive
+```
+
+也可以从 Gitee 下载：
+
+```sh
+git clone https://gitee.com/amchii/ZhiArchive.git
 cd ZhiArchive
 ```
 

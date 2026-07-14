@@ -13,12 +13,14 @@ RUN mkdir -p $PLAYWRIGHT_BROWSERS_PATH
 COPY ./requirements.txt /opt/zhi_archive/requirements.txt
 RUN uv pip install --system -r /opt/zhi_archive/requirements.txt
 
-# 3. 安装浏览器和系统依赖
-# 注意：这一步仍需以 Root 运行，因为 --with-deps 需要安装系统库(apt-get)
-RUN playwright install --with-deps chromium
+# 3. 安装 Chromium 系统依赖
+# 注意：这一步需以 Root 运行，因为 install-deps 会调用 apt-get
+RUN playwright install-deps chromium && rm -rf /var/lib/apt/lists/*
 
-# 4. 修正权限
-RUN chmod -R 777 $PLAYWRIGHT_BROWSERS_PATH
+# 4. Compose 中的 worker 均为无头模式，只安装体积更小的 Headless Shell
+# 与系统依赖分层，浏览器下载失败重试时可以复用上一层缓存
+RUN playwright install --only-shell chromium && \
+    chmod -R 777 $PLAYWRIGHT_BROWSERS_PATH
 
 COPY ./ /opt/zhi_archive
 WORKDIR /opt/zhi_archive
