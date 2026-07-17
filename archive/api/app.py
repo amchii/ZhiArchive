@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from archive.api.endpoints import auth, logs, zhi
 from archive.api.render import templates
 from archive.config import api_settings
+from archive.mcp_server import mcp_http_app, mcp_runtime
 from archive.services import AppServices, set_current_services
 
 
@@ -37,7 +38,8 @@ async def lifespan(application: FastAPI):
     application.state.services = services
     set_current_services(services)
     try:
-        yield
+        async with mcp_runtime.run():
+            yield
     finally:
         set_current_services(None)
         await services.stop()
@@ -47,6 +49,7 @@ app = FastAPI(title="Zhi Archive", lifespan=lifespan)
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(logs.router, prefix="/log", tags=["log"])
 app.include_router(zhi.router, prefix="/zhi", tags=["zhi"])
+app.mount("/mcp", mcp_http_app, name="mcp")
 
 configure_cors(app, api_settings.cors_origins)
 

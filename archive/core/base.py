@@ -325,9 +325,15 @@ class SQLiteConfigurator:
     async def sync_from_worker(self):
         await self._write_configs(self.worker.get_configs(ConfigFilter.ALL))
 
-    async def load_to_worker(self):
-        await self.worker.global_configurator.load_to_worker()
-        configs = await self._get_configs()
+    async def load_to_worker(self, include_global: bool = True) -> None:
+        """把 SQLite 配置加载到 worker。
+
+        Args:
+            include_global: 是否同时加载全局配置。
+        """
+        if include_global:
+            await self.worker.global_configurator.load_to_worker()
+        configs = await self._get_configs(ConfigFilter.WRITABLE)
         if not configs:
             self.logger.info("No configs found in SQLite.")
         else:
@@ -439,11 +445,6 @@ class BaseWorker:
                 setattr(self, cfg.name, cfg.to_python(configs[cfg.name]))
                 loaded[cfg.name] = cfg.to_jsonable(cfg.getattr(self))
         return loaded
-
-    async def push_task(self, task: ArchiveTask):
-        if not hasattr(task, "payload") or task.payload is None:
-            raise ValueError("ArchiveTask payload is required for SQLite queue")
-        return await self.sqlite_store.enqueue_archive_item(task.payload)
 
     async def pop_task(self) -> ArchiveTask | None:
         task = await self.sqlite_store.claim_archive_task()

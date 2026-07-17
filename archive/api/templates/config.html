@@ -555,6 +555,47 @@
     <section class="card">
         <div class="card-header">
             <div>
+                <p class="eyebrow">MCP</p>
+                <h2>AI Agent 接入</h2>
+            </div>
+            <div class="pill badge-warning" id="mcpConfigBadge">读取中</div>
+        </div>
+        <div class="config-form">
+            <div class="field">
+                <label for="mcpEnabled">MCP 服务</label>
+                <select id="mcpEnabled">
+                    <option value="false">关闭</option>
+                    <option value="true">开启</option>
+                </select>
+                <p class="field-help">Streamable HTTP 地址为当前站点的 /mcp/。</p>
+            </div>
+            <div class="field">
+                <label for="mcpReaderTimeout">Reader 超时（秒）</label>
+                <input type="number" id="mcpReaderTimeout" min="5" max="300" required>
+            </div>
+            <div class="field">
+                <label for="mcpMaxContentChars">单次正文上限（字符）</label>
+                <input type="number" id="mcpMaxContentChars"
+                       min="1000" max="500000" required>
+            </div>
+            <div class="field wide">
+                <label for="mcpTokenValue">新 Token（仅生成时显示一次）</label>
+                <input type="text" id="mcpTokenValue" readonly
+                       placeholder="点击“生成新 Token”后在此显示">
+                <p class="field-help" id="mcpTokenStatus">Token 状态：--</p>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="ghost" id="mcpConfigRefresh" type="button">刷新</button>
+            <button class="ghost" id="mcpTokenCopy" type="button" disabled>复制 Token</button>
+            <button class="ghost" id="mcpTokenRotate" type="button">生成新 Token</button>
+            <button class="primary" id="mcpConfigSave" type="button">保存 MCP 配置</button>
+        </div>
+    </section>
+
+    <section class="card">
+        <div class="card-header">
+            <div>
                 <p class="eyebrow">Archiver</p>
                 <h2>手动归档</h2>
             </div>
@@ -818,6 +859,88 @@
     } finally {
       button.disabled = button.dataset.available !== 'true';
       button.textContent = '验证登录';
+    }
+  }
+
+  function renderMCPConfig(data) {
+    const badge = document.getElementById('mcpConfigBadge');
+    document.getElementById('mcpEnabled').value = String(Boolean(data.enabled));
+    document.getElementById('mcpReaderTimeout').value = data.reader_timeout_seconds;
+    document.getElementById('mcpMaxContentChars').value = data.max_content_chars;
+    document.getElementById('mcpTokenStatus').textContent = data.token_configured
+      ? 'Token 状态：已配置'
+      : 'Token 状态：尚未生成';
+    badge.textContent = data.enabled ? '已开启' : '已关闭';
+    badge.classList.toggle('badge-success', data.enabled);
+    badge.classList.toggle('badge-warning', !data.enabled);
+  }
+
+  async function fetchMCPConfig() {
+    try {
+      const response = await fetch('/zhi/core/mcp/config');
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'MCP 配置读取失败。');
+      }
+      renderMCPConfig(data);
+    } catch (error) {
+      showToast('读取失败', error.message || '无法读取 MCP 配置。', 'error');
+    }
+  }
+
+  async function saveMCPConfig() {
+    const payload = {
+      enabled: document.getElementById('mcpEnabled').value === 'true',
+      reader_timeout_seconds: Number(document.getElementById('mcpReaderTimeout').value),
+      max_content_chars: Number(document.getElementById('mcpMaxContentChars').value)
+    };
+    try {
+      const response = await fetch('/zhi/core/mcp/config', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'MCP 配置保存失败。');
+      }
+      renderMCPConfig(data);
+      showToast('保存成功', 'MCP 配置已立即生效。');
+    } catch (error) {
+      showToast('保存失败', error.message || 'MCP 配置保存失败。', 'error');
+    }
+  }
+
+  async function rotateMCPToken() {
+    if (!window.confirm('生成新 Token 会立即使旧 Token 失效，是否继续？')) {
+      return;
+    }
+    try {
+      const response = await fetch('/zhi/core/mcp/token', {method: 'POST'});
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'MCP Token 生成失败。');
+      }
+      renderMCPConfig(data);
+      document.getElementById('mcpTokenValue').value = data.token;
+      document.getElementById('mcpTokenCopy').disabled = false;
+      showToast('Token 已生成', '请立即复制保存，刷新页面后不会再次显示。');
+    } catch (error) {
+      showToast('生成失败', error.message || 'MCP Token 生成失败。', 'error');
+    }
+  }
+
+  async function copyMCPToken() {
+    const input = document.getElementById('mcpTokenValue');
+    if (!input.value) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(input.value);
+      showToast('复制成功', 'MCP Token 已复制到剪贴板。');
+    } catch (error) {
+      input.select();
+      showToast('请手动复制', '浏览器未允许剪贴板访问。', 'error');
     }
   }
 
@@ -1244,6 +1367,7 @@
       return;
     }
     fetchAuthState();
+    fetchMCPConfig();
     fetchGlobalConfigs();
     refreshConfigs('archiver');
     refreshConfigs('monitor');
@@ -1265,6 +1389,10 @@
     document.getElementById('authStateFile').addEventListener('change', event => {
       document.getElementById('authStateUpload').disabled = !event.target.files.length;
     });
+    document.getElementById('mcpConfigRefresh').addEventListener('click', fetchMCPConfig);
+    document.getElementById('mcpConfigSave').addEventListener('click', saveMCPConfig);
+    document.getElementById('mcpTokenRotate').addEventListener('click', rotateMCPToken);
+    document.getElementById('mcpTokenCopy').addEventListener('click', copyMCPToken);
     document.getElementById('globalConfigSave').addEventListener('click', submitGlobalConfigs);
     document.getElementById('globalConfigRefresh').addEventListener('click', fetchGlobalConfigs);
     document.getElementById('monitorCheckpointSave').addEventListener('click', submitMonitorCheckpoint);

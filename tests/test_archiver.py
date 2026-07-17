@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
@@ -7,6 +8,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
 from archive.core.archiver import (
+    ArchiveQueueService,
     Archiver,
     TextArchive,
     format_text_archive_html,
@@ -81,9 +83,11 @@ async def test_enqueue_url_writes_sqlite_archive_task(tmp_path) -> None:
     """验证手动链接会写入 SQLite 归档任务表。"""
     store = SQLiteStore(tmp_path / "zhi.sqlite3")
     await store.connect()
-    archiver = Archiver(base_results_dir=tmp_path, store=store)
+    queue_service = ArchiveQueueService(store)
 
-    task, item = await archiver.enqueue_url("https://www.zhihu.com/question/1/answer/2")
+    task, item = await queue_service.enqueue_url(
+        "https://www.zhihu.com/question/1/answer/2"
+    )
     claimed = await store.claim_archive_task()
 
     assert task.task_name == item["id"]
@@ -94,6 +98,145 @@ async def test_enqueue_url_writes_sqlite_archive_task(tmp_path) -> None:
         "https://www.zhihu.com/question/1/answer/2"
     )
     await store.close()
+
+
+@pytest.mark.asyncio
+async def test_archive_queue_does_not_mutate_live_archiver(tmp_path) -> None:
+    """验证手动入队读取最新目标用户但不修改 live Archiver。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.set_settings("global", {"people": "new-person"})
+    archiver = Archiver(
+        people="running-person",
+        base_results_dir=tmp_path,
+        store=store,
+    )
+    queue_service = ArchiveQueueService(store)
+
+    _task, item = await queue_service.enqueue_url(
+        "https://www.zhihu.com/question/1/answer/2"
+    )
+
+    assert item["people"] == "new-person"
+    assert archiver.people == "running-person"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_archiver_config_load_does_not_mutate_task_identity(tmp_path) -> None:
+    """验证加载 Archiver 配置不会把全局用户写入运行中实例。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.set_settings("global", {"people": "xiaoming"})
+    queue_service = ArchiveQueueService(store)
+    _task, item = await queue_service.enqueue_url(
+        "https://www.zhihu.com/question/1/answer/2"
+    )
+    await store.set_settings("global", {"people": "another-person"})
+    archiver = Archiver(
+        people="running-person",
+        base_results_dir=tmp_path,
+        store=store,
+    )
+
+    await archiver.configurator.load_to_worker(include_global=False)
+
+    assert item["people"] == "xiaoming"
+    assert archiver.people == "running-person"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_store_one_isolates_payload_people(tmp_path) -> None:
+    """验证交错执行的归档任务使用各自 payload 的目录和 Referer。"""
+    archiver = Archiver(
+        people="worker-default",
+        base_results_dir=tmp_path,
+    )
+    archiver.goto = AsyncMock()
+    archiver.fill_target_metadata = AsyncMock()
+    archiver.prepare_page_for_screenshot = AsyncMock()
+    archiver.extract_text_archive = AsyncMock(return_value=make_text_archive())
+    archiver.save_text_archive = AsyncMock(return_value={})
+    routed_count = 0
+    both_routed = asyncio.Event()
+
+    async def wait_for_both_routes(_url: str, _handler: object) -> None:
+        """强制两个任务在注册路由后交错继续执行。"""
+        nonlocal routed_count
+        routed_count += 1
+        if routed_count == 2:
+            both_routed.set()
+        await both_routed.wait()
+
+    def make_page() -> MagicMock:
+        """构造归档任务使用的页面 mock。"""
+        page = MagicMock()
+        page.route = AsyncMock(side_effect=wait_for_both_routes)
+        page.locator.return_value.count = AsyncMock(return_value=0)
+        page.wait_for_timeout = AsyncMock()
+        page.evaluate = AsyncMock(return_value=1000)
+        page.screenshot = AsyncMock()
+        page.keyboard.press = AsyncMock()
+        return page
+
+    items = [
+        {
+            "id": "1111111111111111",
+            "target": {
+                "title": "小红的回答",
+                "link": "https://www.zhihu.com/question/1/answer/2",
+                "author": "xiaohong",
+                "fetched_at": datetime(2026, 7, 9, 12, 0, 0),
+            },
+            "meta": {
+                "action": "小明赞同了",
+                "target_type": TargetType.ANSWER,
+                "acted_at": datetime(2026, 7, 9, 12, 0, 0),
+                "raw": [],
+            },
+            "people": "xiaoming",
+        },
+        {
+            "id": "2222222222222222",
+            "target": {
+                "title": "小蓝的回答",
+                "link": "https://www.zhihu.com/question/3/answer/4",
+                "author": "xiaolan",
+                "fetched_at": datetime(2026, 7, 9, 12, 0, 0),
+            },
+            "meta": {
+                "action": "小华赞同了",
+                "target_type": TargetType.ANSWER,
+                "acted_at": datetime(2026, 7, 9, 12, 0, 0),
+                "raw": [],
+            },
+            "people": "xiaohua",
+        },
+    ]
+    pages = [make_page(), make_page()]
+
+    await asyncio.gather(
+        *(
+            archiver.store_one(item, page)
+            for item, page in zip(items, pages, strict=True)
+        )
+    )
+
+    assert archiver.people == "worker-default"
+    assert len(list((tmp_path / "xiaoming" / "archives").rglob("info.json"))) == 1
+    assert len(list((tmp_path / "xiaohua" / "archives").rglob("info.json"))) == 1
+    for page, people in zip(pages, ("xiaoming", "xiaohua"), strict=True):
+        route_handler = page.route.await_args.args[1]
+        route = MagicMock()
+        route.request.headers = {}
+        route.continue_ = AsyncMock()
+
+        await route_handler(route)
+
+        assert route.request.headers["Referer"] == (
+            f"https://www.zhihu.com/people/{people}"
+        )
 
 
 @pytest.mark.asyncio
@@ -354,6 +497,6 @@ async def test_store_propagates_playwright_error() -> None:
     archiver.logger = MagicMock()
 
     with pytest.raises(PlaywrightError):
-        await archiver.store(MagicMock(), [{"id": "task"}])
+        await archiver.store(MagicMock(), [{"id": "task", "people": "someone"}])
 
     page.close.assert_awaited_once()

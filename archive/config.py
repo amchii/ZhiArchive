@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     sqlite_path: pathlib.Path = root_dir.joinpath("var/zhi_archive.sqlite3")
     # 是否使用无头模式
     archiver_headless: bool = True
+    reader_headless: bool = True
     monitor_headless: bool = True
     login_worker_headless: bool = True
     log_level: Annotated[

@@ -109,10 +109,15 @@ Compose 必须固定一个 Uvicorn worker、一个容器副本；用户绕过标
 - SQLite store；
 - monitor 实例及其后台 `Task`；
 - archiver 实例及其后台 `Task`；
+- MCP Reader 实例及其按需启动的后台 `Task`；
 - 当前 login 任务；
 - 用于唤醒 archiver 的 `asyncio.Event`；
 - monitor 与 archiver 共享的浏览器并发信号量；
 - 用于停止各循环的关闭状态。
+
+MCP Server 作为 FastAPI 下的 Streamable HTTP 子应用运行，使用主服务管理的独立
+Bearer Token。Reader 持有独立 Browser 和有界请求队列，不领取
+`archive_tasks`，也不写回 Playwright storage state。
 
 API 路由直接访问 `AppServices`，不再为每个请求构造临时 Worker 或存储客户端。
 
@@ -172,6 +177,25 @@ Login 不再作为永久轮询 Worker 运行。创建二维码的 API 直接发�
 5. 登录成功后原子替换托管 state，API 继续通过任务 ID 查询状态和读取二维码文件。
 
 应用重启后，无需恢复等待扫码的浏览器页面；未结束的登录任务直接标记为失败，用户重新获取二维码。
+
+### 5.5 MCP Reader
+
+MCP Reader 只执行即时内容读取：
+
+1. 首次读取工具调用按需启动 Reader，MCP 未使用时不启动其 Playwright 驱动；
+2. MCP 工具把回答或文章链接写入进程内有界队列；
+3. Reader 使用独立 Browser 串行消费请求；
+4. 每次请求从托管 state 创建新的 BrowserContext；
+5. 抽取 HTML、Markdown 和元数据后关闭 Context；
+6. Reader 不保存截图、不写归档目录、不回写 Cookie。
+
+`ReaderWorker` 不继承 `Archiver`。两者共同继承只负责知乎页面访问、元数据补全和
+正文抽取的 `ZhihuContentWorker`；截图、文件保存、归档配置和持久化队列仍只属于
+`Archiver`。
+
+认证状态、归档队列和二维码登录工具直接复用 `AppServices` 中现有组件，不通过
+Reader 转发。MCP 开关、正文上限、Reader 超时和 Token 摘要保存在 SQLite 的
+`mcp` 配置域，由主服务配置接口统一控制。
 
 ## 6. SQLite 数据模型
 
@@ -248,6 +272,10 @@ Monitor 每次抓取可以产生多条独立任务。某一条内容失败只影
 
 手动归档也生成一个 `ActivityItem`，沿用同一套表和状态语义，但默认不设置
 `dedupe_key`，允许用户在内容更新后再次手动归档同一链接。
+
+`ActivityItem.people` 是归档任务的目录归属快照。Archiver 消费任务时把 payload 中的
+`people` 作为局部参数传给 Referer 和目录计算，既不从当前全局配置重新读取目标用户，
+也不把任务用户写入 worker 实例；因此任务交错执行或切换监测用户都不会改变保存位置。
 
 ### 6.4 monitor_checkpoints
 

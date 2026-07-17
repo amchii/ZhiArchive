@@ -1,0 +1,330 @@
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+from mcp.server.fastmcp.exceptions import ToolError
+
+import archive.api.app as app_module
+from archive.api import security
+from archive.core.archiver import TextArchive
+from archive.core.base import TargetType
+from archive.mcp_server import (
+    MCPBearerAuthMiddleware,
+    create_mcp_server,
+    enqueue_zhihu_archive,
+    get_zhihu_login_qrcode,
+    read_zhihu_content,
+)
+from archive.services import AppServices
+from archive.storage import SQLiteStore
+
+
+@pytest.mark.asyncio
+async def test_mcp_exposes_expected_zhihu_tools() -> None:
+    """验证一个 MCP Server 同时暴露读取、归档和登录能力。"""
+    server = create_mcp_server()
+    tools = {tool.name for tool in await server.list_tools()}
+
+    assert tools == {
+        "read_zhihu_content",
+        "get_zhihu_auth_status",
+        "enqueue_zhihu_archive",
+        "get_zhihu_archive_task",
+        "start_zhihu_login",
+        "get_zhihu_login_status",
+        "get_zhihu_login_qrcode",
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_content_applies_main_service_pagination(monkeypatch) -> None:
+    """验证 MCP 正文分页上限来自主服务配置。"""
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={
+            "reader_timeout_seconds": 30,
+            "max_content_chars": 4,
+        }
+    )
+    services.reader.submit = AsyncMock(
+        return_value=TextArchive(
+            title="标题",
+            url="https://www.zhihu.com/question/1/answer/2",
+            author="作者",
+            author_url="",
+            published_at="",
+            updated_at="",
+            target_type="回答",
+            html="<p>abcdef</p>",
+            markdown="abcdefghij",
+        )
+    )
+    services.ensure_reader_started = AsyncMock()
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await read_zhihu_content(
+        "https://www.zhihu.com/question/1/answer/2",
+        offset=2,
+    )
+
+    assert result.content == "cdef"
+    assert result.total_chars == 10
+    assert result.truncated is True
+    assert result.next_offset == 6
+    services.reader.submit.assert_awaited_once_with(
+        "https://www.zhihu.com/question/1/answer/2",
+        timeout=30,
+    )
+    services.ensure_reader_started.assert_awaited_once_with()
+
+
+async def call_middleware(
+    middleware: MCPBearerAuthMiddleware,
+    authorization: bytes | None,
+) -> tuple[list[dict[str, object]], AsyncMock]:
+    """调用一次 MCP 鉴权中间件并返回 ASGI 消息。
+
+    Args:
+        middleware: 待测试的认证中间件。
+        authorization: Authorization 请求头内容。
+    """
+    headers = [] if authorization is None else [(b"authorization", authorization)]
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/",
+        "headers": headers,
+    }
+    sent: list[dict[str, object]] = []
+    receive = AsyncMock()
+
+    async def send(message: dict[str, object]) -> None:
+        """记录中间件返回的 ASGI 消息。"""
+        sent.append(message)
+
+    await middleware(scope, receive, send)  # type: ignore[arg-type]
+    return sent, receive
+
+
+@pytest.mark.asyncio
+async def test_mcp_middleware_uses_main_service_token(monkeypatch) -> None:
+    """验证 MCP 路径使用主服务管理的独立 Bearer Token。"""
+    inner = AsyncMock()
+    middleware = MCPBearerAuthMiddleware(inner)
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={"enabled": True, "token_configured": True}
+    )
+    services.mcp_config.verify_token = AsyncMock(
+        side_effect=lambda token: token == "valid-token"
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    rejected, _ = await call_middleware(middleware, b"Bearer invalid")
+    assert rejected[0]["status"] == 401
+    inner.assert_not_awaited()
+
+    accepted, _ = await call_middleware(middleware, b"Bearer valid-token")
+    assert accepted == []
+    inner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_archive_enqueue_does_not_use_live_archiver(monkeypatch) -> None:
+    """验证 MCP 通过独立入队服务提交任务。"""
+    services = MagicMock()
+    item = {
+        "id": "activity-id",
+        "target": {
+            "title": "",
+            "link": "https://www.zhihu.com/question/1/answer/2",
+            "author": "",
+            "fetched_at": "2026-07-17T00:00:00",
+        },
+        "meta": {
+            "action": "手动归档",
+            "target_type": TargetType.ANSWER,
+            "acted_at": "2026-07-17T00:00:00",
+            "raw": [],
+        },
+        "people": "someone",
+    }
+    task = MagicMock(task_name="activity-id")
+    services.archive_queue.enqueue_url = AsyncMock(return_value=(task, item))
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await enqueue_zhihu_archive(item["target"]["link"])
+
+    assert result.task_id == "activity-id"
+    services.archive_queue.enqueue_url.assert_awaited_once()
+
+
+def test_mcp_initialize_uses_token_rotated_by_main_service(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证主服务轮换并启用 Token 后可完成 MCP initialize。"""
+    services = AppServices(SQLiteStore(tmp_path / "zhi.sqlite3"))
+    monkeypatch.setattr(app_module, "AppServices", lambda: services)
+    monkeypatch.setattr(security.api_settings, "enable_auth", False)
+
+    with TestClient(app_module.app, base_url="http://localhost:9090") as client:
+        token_response = client.post("/zhi/core/mcp/token")
+        assert token_response.status_code == 200
+        token_payload = token_response.json()
+        config_response = client.put(
+            "/zhi/core/mcp/config",
+            json={
+                "enabled": True,
+                "reader_timeout_seconds": token_payload["reader_timeout_seconds"],
+                "max_content_chars": token_payload["max_content_chars"],
+            },
+        )
+        assert config_response.status_code == 200
+        assert services.reader_task is None
+
+        initialize_response = client.post(
+            "/mcp/",
+            headers={
+                "Authorization": f"Bearer {token_payload['token']}",
+                "Accept": "application/json, text/event-stream",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "clientInfo": {"name": "pytest", "version": "1.0"},
+                },
+            },
+        )
+        tools_response = client.post(
+            "/mcp/",
+            headers={
+                "Authorization": f"Bearer {token_payload['token']}",
+                "Accept": "application/json, text/event-stream",
+            },
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {},
+            },
+        )
+
+    assert initialize_response.status_code == 200
+    assert initialize_response.json()["result"]["serverInfo"]["name"] == ("ZhiArchive")
+    assert tools_response.status_code == 200
+    assert {tool["name"] for tool in tools_response.json()["result"]["tools"]} == {
+        "read_zhihu_content",
+        "get_zhihu_auth_status",
+        "enqueue_zhihu_archive",
+        "get_zhihu_archive_task",
+        "start_zhihu_login",
+        "get_zhihu_login_status",
+        "get_zhihu_login_qrcode",
+    }
+
+
+def test_main_app_lifespan_can_restart(monkeypatch, tmp_path) -> None:
+    """验证同一 FastAPI app 可在一个进程内重复启动生命周期。"""
+    counter = 0
+
+    def create_services() -> AppServices:
+        """为每次应用生命周期创建独立 SQLite 服务容器。"""
+        nonlocal counter
+        counter += 1
+        return AppServices(SQLiteStore(tmp_path / f"zhi-{counter}.sqlite3"))
+
+    monkeypatch.setattr(app_module, "AppServices", create_services)
+    monkeypatch.setattr(security.api_settings, "enable_auth", False)
+
+    for _index in range(2):
+        with TestClient(app_module.app, base_url="http://localhost:9090") as client:
+            assert client.get("/healthz").status_code == 200
+
+
+def test_reader_failure_does_not_mark_main_service_unhealthy(tmp_path) -> None:
+    """验证可选 Reader 失败不会拖垮 Monitor 和 Archiver 健康状态。"""
+    services = AppServices(SQLiteStore(tmp_path / "zhi.sqlite3"))
+    services.worker_errors["reader"] = "driver exited"
+
+    assert services.healthy() is True
+
+
+@pytest.mark.asyncio
+async def test_cancelled_reader_caller_does_not_start_duplicate_worker(
+    tmp_path,
+) -> None:
+    """验证调用方取消等待后，后续请求会复用同一个 Reader 启动任务。"""
+    services = AppServices(SQLiteStore(tmp_path / "zhi.sqlite3"))
+    worker_started = asyncio.Event()
+    allow_ready = asyncio.Event()
+    run_count = 0
+
+    async def run_reader(headless: bool = True) -> None:
+        """模拟启动较慢且持续运行的 Reader。"""
+        nonlocal run_count
+        run_count += 1
+        worker_started.set()
+        try:
+            await allow_ready.wait()
+            services.reader._ready.set()
+            await asyncio.Future()
+        finally:
+            services.reader._ready.clear()
+
+    services.reader.run_reader = run_reader  # type: ignore[method-assign]
+    first_call = asyncio.create_task(services.ensure_reader_started())
+    await worker_started.wait()
+    original_reader_task = services.reader_task
+
+    first_call.cancel()
+    await asyncio.gather(first_call, return_exceptions=True)
+    second_call = asyncio.create_task(services.ensure_reader_started())
+    allow_ready.set()
+    await second_call
+
+    assert run_count == 1
+    assert services.reader_task is original_reader_task
+    assert services.reader_task is not None
+    services.reader_task.cancel()
+    await asyncio.gather(services.reader_task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_qrcode_tool_rejects_finished_login_task(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证 MCP 不会返回成功或失败任务遗留的旧二维码。"""
+    qrcode_path = tmp_path / "finished.qrcode.png"
+    qrcode_path.write_bytes(b"stale")
+    services = MagicMock()
+    services.store.get_login_task = AsyncMock(
+        return_value={
+            "id": "finished",
+            "qrcode_path": str(qrcode_path),
+            "status": "failed",
+            "last_error": "timeout",
+        }
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    with pytest.raises(ToolError, match="任务已结束"):
+        await get_zhihu_login_qrcode("finished")

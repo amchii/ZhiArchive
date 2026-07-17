@@ -23,7 +23,8 @@ dependencies = [
     "aiofiles",
     "pathvalidate",
     "playwright_stealth>=2.0.0",
-    "aiosqlite"
+    "aiosqlite",
+    "mcp>=1.28.1,<2",
 ]
 
 [dependency-groups]

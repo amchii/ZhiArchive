@@ -16,6 +16,7 @@ class LoggerName(str, Enum):
     login_worker = "login_worker"
     monitor = "monitor"
     archiver = "archiver"
+    reader = "reader"
 
 
 @router.get("/{name}/logs", response_class=PlainTextResponse)

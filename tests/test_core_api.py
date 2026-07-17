@@ -10,6 +10,7 @@ from archive.api.endpoints.zhi import core
 from archive.auth_state import AuthStateManager
 from archive.core.base import TargetType, WorkStatus
 from archive.core.monitor import Monitor
+from archive.mcp_config import MCPConfigManager
 from archive.storage import SQLiteStore
 
 
@@ -92,7 +93,7 @@ async def test_enqueue_archive_task_returns_public_task_id(monkeypatch) -> None:
             },
         )
     )
-    monkeypatch.setattr(core, "get_api_client", lambda _name: client)
+    monkeypatch.setattr(core, "get_archive_queue_service", lambda: client)
 
     result = await core.enqueue_archive_task(
         core.ArchiveURLRequest(
@@ -109,7 +110,7 @@ async def test_enqueue_archive_task_reports_invalid_url(monkeypatch) -> None:
     """验证无效链接会转换成可读的接口校验错误。"""
     client = MagicMock()
     client.enqueue_url = AsyncMock(side_effect=ValueError("不支持的链接"))
-    monkeypatch.setattr(core, "get_api_client", lambda _name: client)
+    monkeypatch.setattr(core, "get_archive_queue_service", lambda: client)
 
     with pytest.raises(HTTPException) as exc_info:
         await core.enqueue_archive_task(
@@ -118,6 +119,31 @@ async def test_enqueue_archive_task_reports_invalid_url(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 422
     assert exc_info.value.detail == "不支持的链接"
+
+
+@pytest.mark.asyncio
+async def test_main_service_requires_token_before_enabling_mcp(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证主服务在生成独立 Token 前不会启用 MCP。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    manager = MCPConfigManager(store)
+    monkeypatch.setattr(core, "get_mcp_config_manager", lambda: manager)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await core.set_mcp_config(
+            core.MCPConfigUpdate(
+                enabled=True,
+                reader_timeout_seconds=60,
+                max_content_chars=50_000,
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert (await manager.get_config())["enabled"] is False
+    await store.close()
 
 
 @pytest.mark.asyncio

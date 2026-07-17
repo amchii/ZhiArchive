@@ -17,5 +17,6 @@ services:
     environment:
       monitor_headless: true
       archiver_headless: true
+      reader_headless: true
       login_worker_headless: true
     mem_limit: ${APP_MEM_LIMIT:-100g}

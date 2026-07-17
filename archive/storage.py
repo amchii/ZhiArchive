@@ -583,6 +583,30 @@ class SQLiteStore:
         ).fetchone()
         return row is not None
 
+    async def get_archive_task(self, task_id: str) -> dict[str, Any] | None:
+        """读取一条归档任务及其公开状态。
+
+        Args:
+            task_id: 归档任务 ID。
+        """
+        db = await self._connection()
+        row = await (
+            await db.execute(
+                """
+                SELECT id, payload, status, attempts, last_error,
+                       created_at, started_at, finished_at
+                FROM archive_tasks
+                WHERE id = ?
+                """,
+                (task_id,),
+            )
+        ).fetchone()
+        if row is None:
+            return None
+        task = dict(row)
+        task["payload"] = json.loads(task["payload"])
+        return task
+
     async def claim_archive_task(self) -> dict[str, Any] | None:
         """用事务领取最早可执行的一条 pending 任务。"""
         now = utcnow_iso()

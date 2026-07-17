@@ -10,28 +10,57 @@ annotated-types==0.7.0
     # via pydantic
 anyio==4.14.1
     # via
+    #   httpx
+    #   mcp
+    #   sse-starlette
     #   starlette
     #   watchfiles
+attrs==26.1.0
+    # via
+    #   jsonschema
+    #   referencing
+certifi==2026.6.17
+    # via
+    #   httpcore
+    #   httpx
 cffi==2.1.0
     # via cryptography
 click==8.4.2
     # via uvicorn
 cryptography==49.0.0
-    # via zhi-archive (pyproject.toml)
+    # via
+    #   zhi-archive (pyproject.toml)
+    #   pyjwt
 fastapi==0.139.0
     # via zhi-archive (pyproject.toml)
 greenlet==3.5.3
     # via playwright
 h11==0.16.0
-    # via uvicorn
+    # via
+    #   httpcore
+    #   uvicorn
+httpcore==1.0.9
+    # via httpx
 httptools==0.8.0
     # via uvicorn
+httpx==0.28.1
+    # via mcp
+httpx-sse==0.4.3
+    # via mcp
 idna==3.18
-    # via anyio
+    # via
+    #   anyio
+    #   httpx
 jinja2==3.1.6
     # via zhi-archive (pyproject.toml)
+jsonschema==4.26.0
+    # via mcp
+jsonschema-specifications==2025.9.1
+    # via jsonschema
 markupsafe==3.0.3
     # via jinja2
+mcp==1.28.1
+    # via zhi-archive (pyproject.toml)
 pathvalidate==3.3.1
     # via zhi-archive (pyproject.toml)
 playwright==1.61.0
@@ -45,39 +74,64 @@ pycparser==3.0
 pydantic==2.13.4
     # via
     #   fastapi
+    #   mcp
     #   pydantic-settings
 pydantic-core==2.46.4
     # via pydantic
 pydantic-settings==2.14.2
-    # via zhi-archive (pyproject.toml)
+    # via
+    #   zhi-archive (pyproject.toml)
+    #   mcp
 pyee==13.0.1
     # via playwright
 pyjwt==2.13.0
-    # via zhi-archive (pyproject.toml)
+    # via
+    #   zhi-archive (pyproject.toml)
+    #   mcp
 python-dotenv==1.2.2
     # via
     #   pydantic-settings
     #   uvicorn
+python-multipart==0.0.32
+    # via mcp
 pyyaml==6.0.3
     # via uvicorn
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
+rpds-py==2026.6.3
+    # via
+    #   jsonschema
+    #   referencing
+sse-starlette==3.4.5
+    # via mcp
 starlette==1.3.1
-    # via fastapi
+    # via
+    #   fastapi
+    #   mcp
+    #   sse-starlette
 typing-extensions==4.16.0
     # via
     #   anyio
     #   fastapi
+    #   mcp
     #   pydantic
     #   pydantic-core
     #   pyee
+    #   referencing
     #   starlette
     #   typing-inspection
 typing-inspection==0.4.2
     # via
     #   fastapi
+    #   mcp
     #   pydantic
     #   pydantic-settings
 uvicorn==0.50.2
-    # via zhi-archive (pyproject.toml)
+    # via
+    #   zhi-archive (pyproject.toml)
+    #   mcp
 uvloop==0.22.1
     # via uvicorn
 watchfiles==1.2.0

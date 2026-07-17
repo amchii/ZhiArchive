@@ -13,6 +13,7 @@ ZhiArchive 基于 Playwright、FastAPI 和 SQLite 工作，适合以单机单实
 - 对动态中的回答和文章触发归档，保存长截图、元信息、HTML 和 Markdown。
 - 对赞同或发布的想法保存动态截图。
 - 支持在控制台手动提交回答或文章链接，主动触发归档。
+- 提供带独立 Bearer Token 的 MCP 接口，供 AI Agent 读取内容、提交归档和发起登录。
 - 提供 Web 控制台管理登录状态、Cookie 路径、目标用户、运行状态和后台任务配置。
 - 提供只读结果浏览器，在线查看动态截图、JSON、HTML 和 Markdown 归档。
 - 支持 Docker 部署，也支持本地 `uv` 环境运行。
@@ -95,7 +96,7 @@ Content Security Policy 加载，避免归档内容访问控制台页面。
 
 - `api`：提供 Web 控制台和配置接口，并通过 FastAPI lifespan 启动后台任务。
 - `monitor`：监测目标用户动态，保存动态截图，并将回答/文章任务写入 SQLite。
-- `archiver`：从 SQLite 领取归档任务，打开回答或文章页面，保存截图、HTML、Markdown 和元信息。
+- `archiver`：从 SQLite 领取归档任务，按 payload 中固化的目标用户目录打开并保存回答或文章的截图、HTML、Markdown 和元信息。
 - `login task`：由 API 按需创建二维码登录任务，并保存 Playwright storage state。
 - `sqlite`：保存运行时配置、暂停状态、抓取检查点、登录任务和归档任务队列。
 
@@ -252,6 +253,33 @@ http://127.0.0.1:9090/zhi/core/config
 6. 在“运行状态”中切换后台任务状态。
 
 如果已有可用的 Playwright storage state 文件，或从浏览器扩展导出的 Cookies JSON，也可以在配置页直接上传并启用，不必重新扫码。应用会把登录态写入 `states/zhihu.state.json`；Docker 部署时该文件通过 `states/` 挂载持久化，配置页不会暴露或保存容器内部路径。
+
+## MCP 接入
+
+MCP Server 与主服务运行在同一进程，通过 Streamable HTTP 暴露：
+
+```text
+http://127.0.0.1:9090/mcp/
+```
+
+MCP 使用独立 Bearer Token，不复用控制台 Cookie。请在配置控制台的
+“AI Agent 接入”区域生成 Token、保存 Reader 超时和正文长度限制，然后开启 MCP。
+Token 明文只在生成或轮换时显示一次，主服务仅在 SQLite 中保存摘要；生成新 Token
+会立即使旧 Token 失效。
+
+当前提供以下工具：
+
+- `read_zhihu_content`：即时读取知乎回答或专栏文章，支持 Markdown、HTML 和分页。
+- `get_zhihu_auth_status`：读取不包含 Cookie 的登录态摘要。
+- `enqueue_zhihu_archive`、`get_zhihu_archive_task`：提交并查询现有归档任务。
+- `start_zhihu_login`、`get_zhihu_login_status`、`get_zhihu_login_qrcode`：发起并完成二维码登录。
+
+ReaderWorker 与 Archiver 是共同继承 `ZhihuContentWorker` 的兄弟 worker，仅复用知乎
+页面访问、元数据补全和正文抽取能力。Reader 使用独立 Browser 和有界队列，每次读取
+创建独立 BrowserContext，且不会把请求上下文中的 Cookie 写回托管 state；截图、保存
+格式和归档队列等 Archiver 语义不会进入 Reader。Monitor 和 Archiver 继续使用原有后台
+队列和浏览器并发控制。Reader 在首次读取时按需启动，MCP 未使用时不会影响主服务健康
+状态。
 
 登录二维码页面示例：
 

@@ -4,6 +4,7 @@ import json
 import pathlib
 import re
 from datetime import datetime
+from functools import partial
 from typing import Literal, TypedDict
 from urllib import parse
 
@@ -12,7 +13,7 @@ from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import Page, Route, async_playwright
 from playwright_stealth import Stealth
 
-from archive.config import settings
+from archive.config import default, settings
 from archive.core.base import (
     ActivityItem,
     ActivityMeta,
@@ -23,6 +24,7 @@ from archive.core.base import (
     TargetType,
     WorkStatus,
 )
+from archive.storage import SQLiteStore
 from archive.utils.common import (
     dt_fromisoformat,
     get_validate_filename,
@@ -279,86 +281,29 @@ def parse_archive_url(url: str) -> tuple[str, TargetType]:
     return parse.urlunparse(("https", host, path, "", "", "")), target_type
 
 
-class Archiver(BaseWorker):
-    name = "archiver"
-    output_name = "archives"
-    configurable = BaseWorker.configurable + [
-        Cfg(
-            "screenshot_max_page_scroll_height",
-        ),
-        Cfg("save_type"),
-    ]
+class ZhihuContentWorker(BaseWorker):
+    """封装知乎回答和文章的页面访问、元数据补全及正文抽取能力。"""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.screenshot_max_page_scroll_height = (
-            settings.screenshot_max_page_scroll_height
-        )
-        self.save_type: Literal["jpeg", "png"] = "jpeg"
+    name = "zhihu_content"
 
-    async def referrer_route(self, route: Route):
+    async def referrer_route(
+        self,
+        route: Route,
+        people: str | None = None,
+    ) -> None:
+        """为知乎目标请求补充指定用户页作为 Referer。
+
+        Args:
+            route: Playwright 拦截到的目标页面请求。
+            people: 任务 payload 中的用户；Reader 未指定时使用自身配置。
+        """
         headers = route.request.headers
-        headers["Referer"] = self.person_page_url
-        await route.continue_(headers=headers)
-
-    async def prepare_page_for_screenshot(self, page: Page) -> None:
-        """
-        清理知乎页面中会干扰长截图拼接的浮动元素。
-        """
-        await page.evaluate(
-            """
-            () => {
-              const styleId = "zhi-archive-screenshot-style";
-              let screenshotStyle = document.getElementById(styleId);
-              if (!screenshotStyle) {
-                screenshotStyle = document.createElement("style");
-                screenshotStyle.id = styleId;
-                (document.head || document.documentElement).appendChild(
-                  screenshotStyle
-                );
-              }
-              screenshotStyle.textContent = `
-                .ContentItem-actions.is-fixed,
-                .RichContent-actions.is-fixed,
-                .CornerButtons {
-                  display: none !important;
-                }
-              `;
-
-              const hideElement = (element) => {
-                if (!element) {
-                  return;
-                }
-                element.setAttribute("data-zhi-archive-hidden", "true");
-                element.style.setProperty("display", "none", "important");
-              };
-
-              const findFixedAncestor = (element) => {
-                let current = element;
-                while (current && current !== document.body) {
-                  const style = window.getComputedStyle(current);
-                  if (style.position === "fixed") {
-                    return current;
-                  }
-                  current = current.parentElement;
-                }
-                return null;
-              };
-
-              const appHeader = document.querySelector(".AppHeader");
-              hideElement(findFixedAncestor(appHeader));
-
-              document
-                .querySelectorAll(
-                  ".ContentItem-actions.is-fixed, " +
-                  ".RichContent-actions.is-fixed, " +
-                  ".CornerButtons"
-                )
-                .forEach(hideElement);
-            }
-            """
+        headers["Referer"] = (
+            default.person_page_url.format(people=people)
+            if people is not None
+            else self.person_page_url
         )
-        await page.wait_for_timeout(timeout=200)
+        await route.continue_(headers=headers)
 
     async def extract_text_archive(
         self,
@@ -677,78 +622,13 @@ class Archiver(BaseWorker):
             archive["author"] = target["author"]
         return archive
 
-    async def save_text_archive(
-        self,
-        target_dir: pathlib.Path,
-        title: str,
-        archive: TextArchive,
-    ) -> dict[str, str]:
-        """
-        将 HTML 与 Markdown 文本归档写入目标目录。
-
-        Args:
-            target_dir: 当前归档对象的保存目录。
-            title: 已清理过的归档文件名前缀。
-            archive: 从页面抽取出的正文和元数据。
-        """
-        html_filename = f"{title}.html"
-        markdown_filename = f"{title}.md"
-        html_path = target_dir.joinpath(html_filename)
-        markdown_path = target_dir.joinpath(markdown_filename)
-        async with aiofiles.open(html_path, "w", encoding="utf-8") as fp:
-            await fp.write(format_text_archive_html(archive))
-        async with aiofiles.open(markdown_path, "w", encoding="utf-8") as fp:
-            await fp.write(format_text_archive_markdown(archive))
-        return {
-            "html": html_filename,
-            "markdown": markdown_filename,
-        }
-
-    async def enqueue_url(self, url: str) -> tuple[ArchiveTask, ActivityItem]:
-        """
-        将一个知乎回答或文章链接加入归档队列。
-
-        Args:
-            url: 知乎回答或专栏文章链接。
-
-        Returns:
-            已推送的任务及其动态数据。
-        """
-        normalized_url, target_type = parse_archive_url(url)
-        await self.global_configurator.load_to_worker(sync=False)
-        now = datetime.now()
-        item_id = uuid_hex()
-        item = ActivityItem(
-            id=item_id,
-            target=Target(
-                title="",
-                link=normalized_url,
-                author="",
-                fetched_at=now,
-            ),
-            meta=ActivityMeta(
-                action="手动归档",
-                target_type=target_type,
-                acted_at=now,
-                raw=[normalized_url],
-            ),
-            people=self.people,
-        )
-        task = ArchiveTask(item_id, payload=item)
-        await self.push_task(task)
-        self.logger.info(f"Push a manual archive task {task} to task list")
-        if hasattr(self, "archive_event"):
-            self.archive_event.set()
-        return task, item
-
     async def fill_target_metadata(
         self,
         page: Page,
         target: Target,
         target_type: TargetType,
     ) -> None:
-        """
-        为手动归档任务补全页面标题和作者。
+        """为知乎回答或文章补全页面标题和作者。
 
         Args:
             page: 已打开目标页面的 Playwright 页面。
@@ -783,6 +663,169 @@ class Archiver(BaseWorker):
         if author_href:
             target["author"] = author_href.rstrip("/").rsplit("/", maxsplit=1)[-1]
 
+
+class ArchiveQueueService:
+    """构造手动归档任务并写入 SQLite，不修改运行中的 Archiver。"""
+
+    def __init__(
+        self,
+        store: SQLiteStore,
+        wakeup_event: asyncio.Event | None = None,
+    ) -> None:
+        """创建归档入队服务。
+
+        Args:
+            store: 主服务持有的 SQLite store。
+            wakeup_event: 新任务写入后用于唤醒 Archiver 的事件。
+        """
+        self.store = store
+        self.wakeup_event = wakeup_event
+
+    async def enqueue_url(self, url: str) -> tuple[ArchiveTask, ActivityItem]:
+        """把知乎回答或文章链接加入持久化归档队列。
+
+        Args:
+            url: 知乎回答或专栏文章链接。
+
+        Returns:
+            已写入的任务及其动态数据。
+        """
+        normalized_url, target_type = parse_archive_url(url)
+        global_config = await self.store.get_settings("global")
+        people = str(global_config.get("people") or settings.people).strip()
+        if not people:
+            raise ValueError("目标用户 people 尚未配置")
+        now = datetime.now()
+        item_id = uuid_hex()
+        item = ActivityItem(
+            id=item_id,
+            target=Target(
+                title="",
+                link=normalized_url,
+                author="",
+                fetched_at=now,
+            ),
+            meta=ActivityMeta(
+                action="手动归档",
+                target_type=target_type,
+                acted_at=now,
+                raw=[normalized_url],
+            ),
+            people=people,
+        )
+        task = ArchiveTask(item_id, payload=item)
+        inserted = await self.store.enqueue_archive_item(item)
+        if not inserted:
+            raise RuntimeError("手动归档任务 ID 冲突，请重试")
+        if self.wakeup_event is not None:
+            self.wakeup_event.set()
+        return task, item
+
+
+class Archiver(ZhihuContentWorker):
+    """消费归档队列并保存知乎内容、元数据及截图。"""
+
+    name = "archiver"
+    output_name = "archives"
+    configurable = BaseWorker.configurable + [
+        Cfg(
+            "screenshot_max_page_scroll_height",
+        ),
+        Cfg("save_type"),
+    ]
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        """创建归档 worker 并初始化截图配置。"""
+        super().__init__(*args, **kwargs)
+        self.screenshot_max_page_scroll_height = (
+            settings.screenshot_max_page_scroll_height
+        )
+        self.save_type: Literal["jpeg", "png"] = "jpeg"
+
+    async def prepare_page_for_screenshot(self, page: Page) -> None:
+        """清理知乎页面中会干扰长截图拼接的浮动元素。"""
+        await page.evaluate(
+            """
+            () => {
+              const styleId = "zhi-archive-screenshot-style";
+              let screenshotStyle = document.getElementById(styleId);
+              if (!screenshotStyle) {
+                screenshotStyle = document.createElement("style");
+                screenshotStyle.id = styleId;
+                (document.head || document.documentElement).appendChild(
+                  screenshotStyle
+                );
+              }
+              screenshotStyle.textContent = `
+                .ContentItem-actions.is-fixed,
+                .RichContent-actions.is-fixed,
+                .CornerButtons {
+                  display: none !important;
+                }
+              `;
+
+              const hideElement = (element) => {
+                if (!element) {
+                  return;
+                }
+                element.setAttribute("data-zhi-archive-hidden", "true");
+                element.style.setProperty("display", "none", "important");
+              };
+
+              const findFixedAncestor = (element) => {
+                let current = element;
+                while (current && current !== document.body) {
+                  const style = window.getComputedStyle(current);
+                  if (style.position === "fixed") {
+                    return current;
+                  }
+                  current = current.parentElement;
+                }
+                return null;
+              };
+
+              const appHeader = document.querySelector(".AppHeader");
+              hideElement(findFixedAncestor(appHeader));
+
+              document
+                .querySelectorAll(
+                  ".ContentItem-actions.is-fixed, " +
+                  ".RichContent-actions.is-fixed, " +
+                  ".CornerButtons"
+                )
+                .forEach(hideElement);
+            }
+            """
+        )
+        await page.wait_for_timeout(timeout=200)
+
+    async def save_text_archive(
+        self,
+        target_dir: pathlib.Path,
+        title: str,
+        archive: TextArchive,
+    ) -> dict[str, str]:
+        """
+        将 HTML 与 Markdown 文本归档写入目标目录。
+
+        Args:
+            target_dir: 当前归档对象的保存目录。
+            title: 已清理过的归档文件名前缀。
+            archive: 从页面抽取出的正文和元数据。
+        """
+        html_filename = f"{title}.html"
+        markdown_filename = f"{title}.md"
+        html_path = target_dir.joinpath(html_filename)
+        markdown_path = target_dir.joinpath(markdown_filename)
+        async with aiofiles.open(html_path, "w", encoding="utf-8") as fp:
+            await fp.write(format_text_archive_html(archive))
+        async with aiofiles.open(markdown_path, "w", encoding="utf-8") as fp:
+            await fp.write(format_text_archive_markdown(archive))
+        return {
+            "html": html_filename,
+            "markdown": markdown_filename,
+        }
+
     async def store_one(self, item: ActivityItem, page: Page) -> Page | None:
         """
         打开并保存一个回答或文章归档。
@@ -791,12 +834,15 @@ class Archiver(BaseWorker):
             item: 待归档的动态数据。
             page: 用于访问目标链接的 Playwright 页面。
         """
+        people = str(item.get("people") or "").strip()
+        if not people:
+            raise ValueError("归档任务缺少 people，无法确定保存目录")
         target = item["target"]
         meta = item["meta"]
         if not target["link"]:
             return
         url, target_type = parse_archive_url(target["link"])
-        await page.route(url, self.referrer_route)
+        await page.route(url, partial(self.referrer_route, people=people))
         await self.goto(page, url)
         await self.fill_target_metadata(page, target, target_type)
         if not target["title"]:
@@ -819,8 +865,12 @@ class Archiver(BaseWorker):
             f"{item['meta']['action']}-{item['target']['title']}{title_suffix}",
             reserved_suffix=title_suffix,
         )
-        # todo: 或许直接通过`ActivityItem.people`来确定保存地址更合理
-        target_dir = self.get_date_dir(acted_at.date()).joinpath(title)
+        target_dir = self._base_results_dir.joinpath(
+            people,
+            self.output_name,
+            acted_at.strftime("%Y/%m/%d"),
+            title,
+        )
         target_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = target_dir.joinpath(f"{title}.{self.save_type}")
         try:
@@ -898,11 +948,6 @@ class Archiver(BaseWorker):
             self.logger.info("Fetch done")
             await empty_page.close()
 
-    async def _run(self, playwright, headless=True, **context_extra):
-        if task := await self.pop_task():
-            self.logger.info(f"New archive task: {task}")
-            await self.store(playwright, [task.payload], headless, **context_extra)
-
     async def run_queue(
         self,
         wakeup_event: asyncio.Event,
@@ -929,10 +974,10 @@ class Archiver(BaseWorker):
             claimed_any = False
             while task := await self.pop_task():
                 claimed_any = True
-                await self.configurator.load_to_worker()
                 await self.set_status(WorkStatus.RUNNING)
                 self.logger.info(f"Claim archive task: {task.task_name}")
                 try:
+                    await self.configurator.load_to_worker(include_global=False)
                     async with Stealth().use_async(async_playwright()) as playwright:
                         if self.browser_semaphore is None:
                             await self.store(

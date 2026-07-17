@@ -5,7 +5,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 from archive.api.render import templates
 from archive.api.security import verify_user_from_cookie
@@ -17,9 +17,10 @@ from archive.auth_state import (
 )
 from archive.config import settings
 from archive.core.api_client import get_api_client
-from archive.core.archiver import Archiver
+from archive.core.archiver import ArchiveQueueService, Archiver
 from archive.core.base import BaseWorker, ConfigFilter, TargetType
 from archive.core.monitor import Monitor
+from archive.mcp_config import MCPConfigManager
 from archive.services import get_current_services
 from archive.storage import SQLiteStore, WorkerBusyError, get_default_store
 
@@ -76,6 +77,29 @@ class MonitorCheckpointUpdate(BaseModel):
     fetch_until: datetime
 
 
+class MCPConfigResponse(BaseModel):
+    """表示主服务对外展示的 MCP 配置。"""
+
+    enabled: bool
+    token_configured: bool
+    reader_timeout_seconds: int
+    max_content_chars: int
+
+
+class MCPConfigUpdate(BaseModel):
+    """表示允许控制台修改的 MCP 配置。"""
+
+    enabled: bool
+    reader_timeout_seconds: int = Field(ge=5, le=300)
+    max_content_chars: int = Field(ge=1_000, le=500_000)
+
+
+class MCPTokenRotationResponse(MCPConfigResponse):
+    """返回仅展示一次的新 MCP Token 及最新配置。"""
+
+    token: str
+
+
 def get_store() -> SQLiteStore:
     """获取当前 API 进程使用的 SQLite store。"""
     services = get_current_services()
@@ -87,6 +111,24 @@ def get_auth_state_manager() -> AuthStateManager:
     services = get_current_services()
     return (
         services.auth_state if services is not None else AuthStateManager(get_store())
+    )
+
+
+def get_mcp_config_manager() -> MCPConfigManager:
+    """获取由主服务持有的 MCP 配置管理器。"""
+    services = get_current_services()
+    return (
+        services.mcp_config if services is not None else MCPConfigManager(get_store())
+    )
+
+
+def get_archive_queue_service() -> ArchiveQueueService:
+    """获取不会修改 live Archiver 的归档入队服务。"""
+    services = get_current_services()
+    return (
+        services.archive_queue
+        if services is not None
+        else ArchiveQueueService(get_store())
     )
 
 
@@ -176,6 +218,37 @@ async def test_auth_state() -> dict[str, Any]:
         return await worker.test_state(manager.path)
     async with services.interactive_browser_semaphore:
         return await worker.test_state(manager.path)
+
+
+@router.get("/mcp/config", response_model=MCPConfigResponse)
+async def get_mcp_config() -> dict[str, Any]:
+    """读取由主服务控制的 MCP 运行配置。"""
+    return await get_mcp_config_manager().get_config()
+
+
+@router.put("/mcp/config", response_model=MCPConfigResponse)
+async def set_mcp_config(payload: MCPConfigUpdate) -> dict[str, Any]:
+    """更新 MCP 开关和 Reader 返回限制。
+
+    Args:
+        payload: 新的 MCP 运行配置。
+    """
+    manager = get_mcp_config_manager()
+    current = await manager.get_config()
+    if payload.enabled and not current["token_configured"]:
+        raise HTTPException(status_code=409, detail="请先生成 MCP Token")
+    return await manager.update_config(
+        enabled=payload.enabled,
+        reader_timeout_seconds=payload.reader_timeout_seconds,
+        max_content_chars=payload.max_content_chars,
+    )
+
+
+@router.post("/mcp/token", response_model=MCPTokenRotationResponse)
+async def rotate_mcp_token() -> dict[str, Any]:
+    """生成新 MCP Token，明文只在本次响应中返回。"""
+    token, config = await get_mcp_config_manager().rotate_token()
+    return {**config, "token": token}
 
 
 @router.put("/{name}/pause", response_model=PauseStatus)
@@ -274,9 +347,8 @@ async def enqueue_archive_task(payload: ArchiveURLRequest) -> dict[str, Any]:
     Args:
         payload: 包含待归档链接的请求数据。
     """
-    client = get_api_client(Archiver.name)
     try:
-        _task, item = await client.enqueue_url(payload.url)
+        _task, item = await get_archive_queue_service().enqueue_url(payload.url)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {
