@@ -15,8 +15,9 @@ ZhiArchive 是一个用于监测知乎用户动态并将相关内容保存到本
 - `archive/config.py`：运行配置入口，支持环境变量、`.env` 和 `.apienv`。
 - `archive/storage.py`：SQLite schema、运行配置、抓取进度和任务队列。
 - `archive/services.py`：FastAPI lifespan 中的后台服务容器。
-- `run_api.sh`：单进程 API 入口；其他 `run_*.py` 仅保留废弃提示。
-- `docker-compose.yaml`、`docker-compose2.yaml`：容器化部署配置。
+- `run_api.sh`：单进程 API 入口；Monitor、archiver 和二维码登录任务由
+  FastAPI lifespan 统一启动。
+- `docker-compose.yaml`：容器化部署配置。
 
 ## 常用命令
 
@@ -48,7 +49,6 @@ Docker 启动：
 
 ```sh
 docker compose up -d
-docker compose -f docker-compose2.yaml up -d
 ```
 
 代码检查：

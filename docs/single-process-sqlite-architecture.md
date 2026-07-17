@@ -384,8 +384,8 @@ uvicorn archive.api.app:app --host 0.0.0.0 --port 9090 --workers 1
 - Docker Compose 只保留一个应用服务；
 - 删除 Redis volume 和各独立 Worker 服务；
 - `run_api.sh` 成为默认启动入口；
-- `run_monitor.py`、`run_archiver.py`、`run_login_worker.py` 和
-  `run_all_workers_in_one.py` 在迁移完成后删除，或暂时保留为明确标注的开发工具；
+- 已删除 `run_monitor.py`、`run_archiver.py`、`run_login_worker.py` 和
+  `run_all_workers_in_one.py` 等旧多进程入口；
 - 安装脚本和 README 统一描述单容器部署方式。
 
 `var/` 已在 `.gitignore` 中忽略。Docker 应将 `var/`、`states/`、`results/` 和

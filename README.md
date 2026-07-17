@@ -225,12 +225,6 @@ docker build -t zhi-archive:latest -f CN.Dockerfile .
 docker compose up -d
 ```
 
-兼容旧文件名的 Compose 入口：
-
-```sh
-docker compose -f docker-compose2.yaml up -d
-```
-
 SQLite 数据库默认位于 `var/zhi_archive.sqlite3`。容器部署时请持久化 `var/`、`states/`、`results/` 和 `logs/`。
 
 注意：容器内 Chromium 在 root 用户下无法以沙盒模式启动。公网部署时应限制容器权限和内存，并参考 Playwright Docker 安全建议。
