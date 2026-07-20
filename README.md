@@ -78,7 +78,7 @@ http://127.0.0.1:9090/zhi/results
 文本文件的在线预览上限为 1 MiB，超过限制时请直接下载。HTML 归档通过浏览器沙箱和
 Content Security Policy 加载，避免归档内容访问控制台页面。
 
-结果文件可能包含个人归档数据。将 API 暴露到公网前，请在 `.apienv` 中开启鉴权。
+> 结果文件可能包含个人归档数据。将 API 暴露到公网前，请参考[安全](#安全)小节完成鉴权和公网部署配置。
 
 动态卡片截图示例：
 
@@ -194,8 +194,7 @@ PowerShell 脚本的 `-Gitee` 会将 clone 地址切换到 Gitee；显式传入 
 http://127.0.0.1:9090/zhi/core/config
 ```
 
-> 一键安装沿用 `docker-compose.yaml` 的端口配置。部署到公网前，请配置
-> `.apienv` 鉴权、防火墙或反向代理，不要直接暴露未鉴权的控制台。
+> 一键安装沿用 `docker-compose.yaml` 的端口配置。部署到公网前，请参考[安全](#安全)小节完成鉴权和公网部署配置。
 
 ### 手动安装
 
@@ -227,7 +226,7 @@ docker compose up -d
 
 SQLite 数据库默认位于 `var/zhi_archive.sqlite3`。容器部署时请持久化 `var/`、`states/`、`results/` 和 `logs/`。
 
-注意：容器内 Chromium 在 root 用户下无法以沙盒模式启动。公网部署时应限制容器权限和内存，并参考 Playwright Docker 安全建议。
+> 容器内 Chromium 在 root 用户下无法以沙盒模式启动，公网部署时请参考[安全](#安全)小节中的 Docker 部署建议。
 
 ## 初始化
 
@@ -291,20 +290,44 @@ ReaderWorker 与 Archiver 是共同继承 `ZhihuContentWorker` 的兄弟 worker�
 
 配置来源包括环境变量、`.env`、`.apienv` 和 SQLite 中的运行时配置。常见配置项见 [archive/config.py](./archive/config.py)。
 
-公网暴露 API 时，建议启用 `.apienv` 鉴权：
+公网暴露 API 时，务必启用鉴权，详见[安全](#安全)小节。
+
+控制台中的目标用户是全局配置，会同时影响 monitor 和 archiver。monitor 和 archiver 的可编辑配置保存在 SQLite 中，修改 `.env` 默认值不会覆盖已保存的运行时配置。
+
+## 安全
+
+ZhiArchive 会保存知乎登录态、Cookie、截图和归档内容，这些数据属于敏感信息。将 API 暴露到公网前，请务必完成以下配置。
+
+### API 鉴权
+
+在 `.apienv` 中启用 HTTP Basic Auth：
 
 ```env
 enable_auth=true
-username=
-password=
+username=你的用户名
+password=你的密码
 # 仅当前端与 API 不同源时配置；多个 Origin 使用英文逗号分隔
-cors_allowed_origins=https://console.example.com,http://127.0.0.1:3000
+cors_allowed_origins=https://console.example.com
 ```
 
-`cors_allowed_origins` 默认为空，此时 API 只支持同源访问。配置值必须是明确的
-HTTP(S) Origin，不能使用 `*`，也不能包含路径、查询参数或账号凭据。
+`cors_allowed_origins` 默认为空，此时 API 只支持同源访问。配置值必须是明确的 HTTP(S) Origin，不能使用 `*`，也不能包含路径或查询参数。
 
-控制台中的目标用户是全局配置，会同时影响 monitor 和 archiver。monitor 和 archiver 的可编辑配置保存在 SQLite 中，修改 `.env` 默认值不会覆盖已保存的运行时配置。
+### 公网部署
+
+- 通过防火墙或反向代理（Nginx、Caddy 等）限制对 API 端口的直接访问，只暴露必要端口。
+- 为反向代理配置 HTTPS，避免凭证明文传输。
+- 不要将未鉴权的控制台直接暴露到公网。
+- `secret_key` 用于签名会话 Cookie，安装脚本会自动生成随机值；手动部署时请在 `.env` 中设置足够强度的 `secret_key`。
+
+### Docker 部署安全
+
+- 容器内 Chromium 在 root 用户下无法以沙盒模式启动，公网部署时建议限制容器权限和内存。
+- 持久化目录（`var/`、`states/`、`results/`、`logs/`）包含敏感数据，应设置适当的文件系统权限，避免被其他进程读取。
+- 参考 [Playwright Docker 安全建议](https://playwright.dev/docs/docker#security) 进行加固。
+
+### MCP Token
+
+MCP 使用独立 Bearer Token 鉴权，不复用控制台 Cookie。Token 明文只在生成或轮换时显示一次，请妥善保存；生成新 Token 会使旧 Token 立即失效。将 MCP 端点暴露到公网时，同样建议通过反向代理配置 HTTPS。
 
 ## 手动归档
 
