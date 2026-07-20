@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     )  # 浏览器上下文state目录，默认为：项目目录/states
     people: str = "someone"  # 知乎用户，https://www.zhihu.com/people/<someone>
     activity_item_selector: str = default.activity_item_selector
+    activity_item_content_timeout: int = 10 * 1000  # 10s，动态页内容加载内容超时时间
     context_default_timeout: int = 10 * 1000  # 10s
     algorithm: str = "HS256"
     sqlite_path: pathlib.Path = root_dir.joinpath("var/zhi_archive.sqlite3")

@@ -308,7 +308,7 @@ class Monitor(BaseWorker):
                     .nth(start)
                     .locator("div.ContentItem")
                     .wait_for(
-                        timeout=5 * 1000,
+                        timeout=settings.activity_item_content_timeout,
                     )
                 )
                 self.logger.info("加载成功")
