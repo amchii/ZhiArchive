@@ -2,17 +2,45 @@
 
 ## Unreleased
 
+## 26.7.1 - 2026-07-24
+
+本版本完成单进程 SQLite 架构落地，新增结果浏览器和带独立 Token 的 MCP 接入，并清理旧的多 worker 启动方式。
+
 ### 破坏性变更
 
 - 移除 Redis 和独立 worker 部署，改为单个 FastAPI 进程通过 lifespan 启动 monitor、archiver 和按需二维码登录任务。
 - 运行时配置、暂停状态、抓取检查点、登录任务和归档任务队列改为保存到本地 SQLite，默认路径为 `var/zhi_archive.sqlite3`。
 - 移除可编辑的 `global:state_path` 和登录任务中的临时 state 路径；已有可访问的旧 state 会在 SQLite schema v2 升级时迁移到托管文件。
 - 本版本不提供 Redis 到 SQLite 的自动迁移工具；已有 Redis 数据需要手动迁移或以全新部署方式使用。
+- 删除 `run_monitor.py`、`run_archiver.py`、`run_login_worker.py`、`run_all_workers_in_one.py`、`docker-compose2.yaml`、`pull_and_build.sh` 和旧 seccomp 配置；统一使用 `run_api.sh` 或 Docker Compose 启动主服务。
+
+### 新增
+
+- 新增只读结果浏览器，可在控制台查看 `results/<people>/activities` 和 `results/<people>/archives` 中的图片、JSON、HTML、Markdown 和纯文本归档。
+- 新增 Streamable HTTP MCP 服务，支持 AI Agent 读取知乎内容、提交归档任务、查询任务状态和发起二维码登录。
+- 控制台新增 MCP 配置区，可启停 MCP、配置 Reader 超时和正文长度上限，并生成或轮换独立 Bearer Token。
+- 新增 `ReaderWorker`，复用知乎登录态读取回答、文章和想法正文，供 MCP 工具按需调用。
+- 新增 Bash 和 PowerShell 一键 Docker 安装脚本，支持 GitHub/Gitee 源和国内镜像安装方式。
+- 新增单进程 SQLite 架构说明文档。
 
 ### 改进
 
 - 知乎登录态改为应用托管的固定 state 文件；控制台支持上传 Playwright state 或浏览器 Cookies JSON，不再要求用户填写运行环境绝对路径。
 - Worker 回写 storage state 时增加修订检查，避免运行中的旧浏览器上下文覆盖用户刚上传的新登录态。
+- Dockerfile、CN.Dockerfile、`docker-compose.yaml` 和 README 适配单进程服务和持久化目录布局。
+- 控制台增加归档结果入口，并完善 worker 状态、MCP 状态和运行配置展示。
+- Monitor 新增动态内容加载超时配置项，降低知乎页面动态加载异常时的阻塞风险。
+- README 将公网暴露、鉴权、MCP Token、Docker 持久化和登录态保护说明整合到独立“安全”小节。
+
+### 修复
+
+- 拒绝保存 `NaN`、`Infinity` 等非有限 cookie expiry 值，避免无效浏览器 Cookie 导致登录态写入或加载异常。
+- 二维码登录超时后不再用未登录浏览器状态覆盖已有有效登录态。
+- MCP 日志处理避免把业务 INFO 日志写入 FastMCP root handler。
+
+### 维护
+
+- 新增和更新 auth state、SQLite store、MCP、Reader、结果浏览器、登录、配置和归档相关测试。
 
 ## 26.7.0 - 2026-07-09
 
