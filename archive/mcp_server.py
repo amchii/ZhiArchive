@@ -23,6 +23,7 @@ from archive.core.profile import (
     normalize_people,
     validate_profile_limit,
 )
+from archive.core.question import QuestionResult, parse_question_url
 from archive.services import get_current_services, new_qrcode_task
 
 if TYPE_CHECKING:
@@ -194,6 +195,33 @@ async def read_zhihu_content(
         truncated=next_offset is not None,
         next_offset=next_offset,
     )
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
+async def read_zhihu_question(url: str) -> QuestionResult:
+    """读取一个知乎问题本身，不读取其下的回答正文。
+
+    Args:
+        url: `https://www.zhihu.com/question/{id}` 格式的知乎问题链接。
+    """
+    services = require_services()
+    try:
+        normalized_url, _question_id = parse_question_url(url)
+        config = await services.mcp_config.get_config()
+        await services.ensure_reader_started()
+        return await services.reader.submit_question(
+            normalized_url,
+            timeout=config["reader_timeout_seconds"],
+        )
+    except (RuntimeError, ValueError) as error:
+        raise ToolError(str(error)) from error
 
 
 async def resolve_profile_people(
@@ -488,9 +516,10 @@ def create_mcp_server() -> FastMCP:
     server = FastMCP(
         "ZhiArchive",
         instructions=(
-            "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文和个人内容列表、"
+            "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文、问题和个人内容列表、"
             "提交归档任务，并按需发起二维码登录。正文读取支持知乎回答和专栏文章；"
-            "个人列表支持回答、文章、想法、收藏夹及收藏夹内容。"
+            "问题读取返回问题描述、话题和统计；个人列表支持回答、文章、想法、"
+            "收藏夹及收藏夹内容。"
         ),
         streamable_http_path="/",
         stateless_http=True,

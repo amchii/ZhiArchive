@@ -11,8 +11,10 @@ from archive.core.profile import (
     ProfilePage,
     ProfileRateLimitError,
 )
+from archive.core.question import QuestionResult
 from archive.core.reader import (
     ProfileReaderJob,
+    QuestionReaderJob,
     ReaderAuthStateError,
     ReaderError,
     ReaderJob,
@@ -246,6 +248,72 @@ async def test_reader_profile_uses_independent_context(monkeypatch, tmp_path) ->
 
 
 @pytest.mark.asyncio
+async def test_reader_question_uses_context_and_short_term_cache(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证问题读取关闭独立 Context，并缓存相同问题。"""
+    worker = ReaderWorker(init_state_path=tmp_path / "zhihu.state.json")
+    worker.auth_state.status = AsyncMock(
+        return_value={"configured": True, "valid": True, "error": None}
+    )
+    browser = MagicMock()
+    context = MagicMock()
+    context.close = AsyncMock()
+    page = MagicMock()
+    worker._ensure_browser = AsyncMock(return_value=browser)
+    worker._new_reader_context = AsyncMock(return_value=context)
+    worker.new_page = AsyncMock(return_value=page)
+    worker.goto = AsyncMock()
+    expected = QuestionResult(
+        id="123",
+        title="测试问题",
+        url="https://www.zhihu.com/question/123",
+        detail="问题描述",
+        detail_html="<p>问题描述</p>",
+        author="提问者",
+        author_url="https://www.zhihu.com/people/asker",
+        topics=[],
+        created_at=None,
+        updated_at=None,
+        answer_count=1,
+        follower_count=2,
+        visit_count=3,
+        comment_count=4,
+    )
+    read_result = AsyncMock(return_value=expected)
+    monkeypatch.setattr(reader_module, "read_question", read_result)
+
+    first = await worker._read_question(
+        "https://www.zhihu.com/question/123",
+        headless=True,
+    )
+    second = await worker._read_question(
+        "https://www.zhihu.com/question/123",
+        headless=True,
+    )
+
+    assert first is expected
+    assert second == expected
+    assert second is not expected
+    worker._ensure_browser.assert_awaited_once_with(True)
+    worker._new_reader_context.assert_awaited_once_with(browser)
+    worker.new_page.assert_awaited_once_with(context)
+    worker.goto.assert_awaited_once_with(
+        page,
+        "https://www.zhihu.com/question/123",
+        wait_until="domcontentloaded",
+        timeout=worker.page_default_timeout,
+    )
+    read_result.assert_awaited_once_with(
+        page,
+        "https://www.zhihu.com/question/123",
+        timeout=worker.page_default_timeout,
+    )
+    context.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_reader_profile_applies_minimum_interval_and_jitter(
     monkeypatch,
 ) -> None:
@@ -357,6 +425,47 @@ async def test_submit_profile_uses_shared_reader_queue() -> None:
         offset=0,
         limit=20,
         collection_id=None,
+        headless=True,
+    )
+    worker.queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_submit_question_uses_shared_reader_queue() -> None:
+    """验证问题读取进入 Reader 有界队列并按类型分派。"""
+    worker = ReaderWorker()
+    worker._ready.set()
+    expected = QuestionResult(
+        id="123",
+        title="测试问题",
+        url="https://www.zhihu.com/question/123",
+        detail="",
+        detail_html="",
+        author="",
+        author_url="",
+        topics=[],
+        created_at=None,
+        updated_at=None,
+        answer_count=1,
+        follower_count=2,
+        visit_count=3,
+        comment_count=4,
+    )
+    worker._read_question = AsyncMock(return_value=expected)
+    submit_task = asyncio.create_task(
+        worker.submit_question(
+            "https://www.zhihu.com/question/123",
+            timeout=30,
+        )
+    )
+    job = await worker.queue.get()
+
+    assert isinstance(job, QuestionReaderJob)
+    result = await worker._execute_job(job, headless=True)
+    job.future.set_result(result)
+    assert await submit_task is expected
+    worker._read_question.assert_awaited_once_with(
+        "https://www.zhihu.com/question/123",
         headless=True,
     )
     worker.queue.task_done()

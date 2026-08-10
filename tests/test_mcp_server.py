@@ -10,6 +10,7 @@ from archive.api import security
 from archive.core.archiver import TextArchive
 from archive.core.base import TargetType
 from archive.core.profile import ProfileContentType, ProfilePage
+from archive.core.question import QuestionResult
 from archive.mcp_server import (
     MCPBearerAuthMiddleware,
     create_mcp_server,
@@ -18,6 +19,7 @@ from archive.mcp_server import (
     list_zhihu_collection_items,
     list_zhihu_profile_items,
     read_zhihu_content,
+    read_zhihu_question,
 )
 from archive.services import AppServices
 from archive.storage import SQLiteStore
@@ -31,6 +33,7 @@ async def test_mcp_exposes_expected_zhihu_tools() -> None:
 
     assert tools == {
         "read_zhihu_content",
+        "read_zhihu_question",
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",
@@ -85,6 +88,52 @@ async def test_read_content_applies_main_service_pagination(monkeypatch) -> None
         timeout=30,
     )
     services.ensure_reader_started.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_read_question_validates_url_and_uses_reader(monkeypatch) -> None:
+    """验证问题工具标准化链接并复用 Reader 超时配置。"""
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={"reader_timeout_seconds": 30}
+    )
+    services.ensure_reader_started = AsyncMock()
+    expected = QuestionResult(
+        id="123",
+        title="测试问题",
+        url="https://www.zhihu.com/question/123",
+        detail="问题描述",
+        detail_html="<p>问题描述</p>",
+        author="提问者",
+        author_url="",
+        topics=[],
+        created_at=None,
+        updated_at=None,
+        answer_count=1,
+        follower_count=2,
+        visit_count=3,
+        comment_count=4,
+    )
+    services.reader.submit_question = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await read_zhihu_question(
+        "https://www.zhihu.com/question/123?utm_source=test"
+    )
+
+    assert result is expected
+    services.reader.submit_question.assert_awaited_once_with(
+        "https://www.zhihu.com/question/123",
+        timeout=30,
+    )
+    services.ensure_reader_started.assert_awaited_once_with()
+
+    with pytest.raises(ToolError, match="不包含回答 ID"):
+        await read_zhihu_question("https://www.zhihu.com/question/123/answer/456")
+    assert services.reader.submit_question.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -319,6 +368,7 @@ def test_mcp_initialize_uses_token_rotated_by_main_service(
     assert tools_response.status_code == 200
     assert {tool["name"] for tool in tools_response.json()["result"]["tools"]} == {
         "read_zhihu_content",
+        "read_zhihu_question",
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",

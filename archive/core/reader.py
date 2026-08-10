@@ -26,6 +26,11 @@ from archive.core.profile import (
     ProfileRateLimitError,
     read_profile_page,
 )
+from archive.core.question import (
+    QuestionResult,
+    parse_question_url,
+    read_question,
+)
 from archive.env import user_agent
 
 DEFAULT_READER_QUEUE_SIZE = 8
@@ -52,7 +57,7 @@ class ReaderRequestCancelledError(ReaderError):
 
 
 class ReaderProfileCooldownError(ReaderError):
-    """表示个人列表请求因知乎风控响应而处于本地冷却期。"""
+    """表示知乎读取请求因列表 API 风控响应而处于本地冷却期。"""
 
 
 @dataclass
@@ -79,8 +84,18 @@ class ProfileReaderJob:
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-ReaderQueueJob = ReaderJob | ProfileReaderJob
-ReaderResult = TextArchive | ProfilePage
+@dataclass
+class QuestionReaderJob:
+    """表示等待 ReaderWorker 执行的一次问题读取请求。"""
+
+    url: str
+    future: asyncio.Future[QuestionResult]
+    deadline: float
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+ReaderQueueJob = ReaderJob | ProfileReaderJob | QuestionReaderJob
+ReaderResult = TextArchive | ProfilePage | QuestionResult
 ProfileCacheKey = tuple[
     ProfileContentType,
     str | None,
@@ -99,6 +114,14 @@ class ProfileCacheEntry:
     page: ProfilePage
 
 
+@dataclass
+class QuestionCacheEntry:
+    """表示一条知乎问题的短期内存缓存。"""
+
+    expires_at: float
+    question: QuestionResult
+
+
 def normalize_profile_seconds(value: float, name: str) -> float:
     """校验个人列表风控配置并返回非负秒数。
 
@@ -113,7 +136,7 @@ def normalize_profile_seconds(value: float, name: str) -> float:
 
 
 class ReaderWorker(ZhihuContentWorker):
-    """使用独立 Browser 即时读取知乎正文和个人列表，不进入归档队列。"""
+    """使用独立 Browser 即时读取知乎正文、问题和个人列表。"""
 
     name = "reader"
     output_name = ""
@@ -182,6 +205,7 @@ class ReaderWorker(ZhihuContentWorker):
         self._profile_cooldown_until = 0.0
         self._profile_rate_limit_failures = 0
         self._profile_cache: dict[ProfileCacheKey, ProfileCacheEntry] = {}
+        self._question_cache: dict[tuple[str, str | None], QuestionCacheEntry] = {}
 
     @property
     def is_ready(self) -> bool:
@@ -271,6 +295,37 @@ class ReaderWorker(ZhihuContentWorker):
             future.cancel()
             raise
 
+    async def submit_question(self, url: str, timeout: int) -> QuestionResult:
+        """提交一次知乎问题读取并等待结果。
+
+        Args:
+            url: 不包含回答 ID 的知乎问题链接。
+            timeout: 等待 Reader 返回结果的最大秒数。
+        """
+        if not self._ready.is_set():
+            raise ReaderUnavailableError("ReaderWorker 尚未就绪")
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[QuestionResult] = loop.create_future()
+        job = QuestionReaderJob(
+            url=url,
+            future=future,
+            deadline=loop.time() + timeout,
+        )
+        try:
+            self.queue.put_nowait(job)
+        except asyncio.QueueFull as error:
+            future.cancel()
+            raise ReaderBusyError("Reader 请求队列已满") from error
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError as error:
+            job.cancel_event.set()
+            raise ReaderError("读取知乎问题超时") from error
+        except asyncio.CancelledError:
+            job.cancel_event.set()
+            future.cancel()
+            raise
+
     async def run_reader(self, headless: bool = True) -> None:
         """持续消费即时读取请求，并维护 Reader 独立 Browser。
 
@@ -326,7 +381,10 @@ class ReaderWorker(ZhihuContentWorker):
         remaining = job.deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise ReaderError("读取知乎内容超时")
-        if isinstance(job, ProfileReaderJob):
+        if isinstance(job, QuestionReaderJob):
+            read_coro = self._read_question(job.url, headless=headless)
+            task_name = "zhi-question-reader-request"
+        elif isinstance(job, ProfileReaderJob):
             read_coro = self._read_profile(
                 content_type=job.content_type,
                 people=job.people,
@@ -462,15 +520,55 @@ class ReaderWorker(ZhihuContentWorker):
             page=page.model_copy(deep=True),
         )
 
+    def _get_cached_question(
+        self,
+        key: tuple[str, str | None],
+        now: float,
+    ) -> QuestionResult | None:
+        """返回尚未过期的问题缓存并清理旧条目。
+
+        Args:
+            key: 问题 URL 与登录态修订时间组成的缓存键。
+            now: 当前事件循环单调时间。
+        """
+        expired_keys = [
+            cache_key
+            for cache_key, entry in self._question_cache.items()
+            if entry.expires_at <= now
+        ]
+        for cache_key in expired_keys:
+            self._question_cache.pop(cache_key, None)
+        entry = self._question_cache.get(key)
+        return entry.question.model_copy(deep=True) if entry is not None else None
+
+    def _cache_question(
+        self,
+        key: tuple[str, str | None],
+        question: QuestionResult,
+        now: float,
+    ) -> None:
+        """把知乎问题保存到短期内存缓存。
+
+        Args:
+            key: 问题 URL 与登录态修订时间组成的缓存键。
+            question: 已成功解析的问题结构。
+            now: 当前事件循环单调时间。
+        """
+        if self.profile_cache_ttl_seconds <= 0:
+            return
+        self._question_cache[key] = QuestionCacheEntry(
+            expires_at=now + self.profile_cache_ttl_seconds,
+            question=question.model_copy(deep=True),
+        )
+
     async def _wait_for_profile_request_slot(self) -> None:
-        """执行个人列表请求前检查冷却期并应用随机请求间隔。"""
+        """执行问题页或个人列表请求前检查冷却期并应用随机间隔。"""
         loop = asyncio.get_running_loop()
         now = loop.time()
         cooldown_remaining = self._profile_cooldown_until - now
         if cooldown_remaining > 0:
             raise ReaderProfileCooldownError(
-                "知乎个人列表请求正在冷却，"
-                f"请约 {math.ceil(cooldown_remaining)} 秒后再试"
+                f"知乎读取请求正在冷却，请约 {math.ceil(cooldown_remaining)} 秒后再试"
             )
         if self._profile_last_request_at is None:
             return
@@ -546,6 +644,50 @@ class ReaderWorker(ZhihuContentWorker):
                 target_type,
                 normalized_url,
             )
+        finally:
+            await context.close()
+
+    async def _read_question(self, url: str, headless: bool) -> QuestionResult:
+        """使用独立 BrowserContext 读取一条知乎问题。
+
+        Args:
+            url: 不包含回答 ID 的知乎问题链接。
+            headless: 是否使用无头浏览器。
+        """
+        status = await self.auth_state.status()
+        if not status["configured"] or not status["valid"]:
+            raise ReaderAuthStateError(status["error"] or "知乎登录状态不可用")
+
+        normalized_url, _question_id = parse_question_url(url)
+        auth_updated_at = status.get("updated_at")
+        auth_revision = (
+            auth_updated_at.isoformat() if auth_updated_at is not None else None
+        )
+        cache_key = (normalized_url, auth_revision)
+        loop = asyncio.get_running_loop()
+        cached_question = self._get_cached_question(cache_key, loop.time())
+        if cached_question is not None:
+            return cached_question
+
+        await self._wait_for_profile_request_slot()
+        browser = await self._ensure_browser(headless)
+        context = await self._new_reader_context(browser)
+        try:
+            self._profile_last_request_at = loop.time()
+            page = await self.new_page(context)
+            await self.goto(
+                page,
+                normalized_url,
+                wait_until="domcontentloaded",
+                timeout=self.page_default_timeout,
+            )
+            question = await read_question(
+                page,
+                normalized_url,
+                timeout=self.page_default_timeout,
+            )
+            self._cache_question(cache_key, question, loop.time())
+            return question
         finally:
             await context.close()
 
