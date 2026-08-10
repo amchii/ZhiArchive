@@ -263,16 +263,26 @@ Token 明文只在生成或轮换时显示一次，主服务仅在 SQLite 中保
 当前提供以下工具：
 
 - `read_zhihu_content`：即时读取知乎回答或专栏文章，支持 Markdown、HTML 和分页。
+- `list_zhihu_profile_items`：分页查看用户发布的回答、文章、想法或收藏夹；
+  省略用户 ID 时使用当前全局目标用户。
+- `list_zhihu_collection_items`：使用收藏夹 ID 分页查看其中的内容。
 - `get_zhihu_auth_status`：读取不包含 Cookie 的登录态摘要。
 - `enqueue_zhihu_archive`、`get_zhihu_archive_task`：提交并查询现有归档任务。
 - `start_zhihu_login`、`get_zhihu_login_status`、`get_zhihu_login_qrcode`：发起并完成二维码登录。
 
-ReaderWorker 与 Archiver 是共同继承 `ZhihuContentWorker` 的兄弟 worker，仅复用知乎
-页面访问、元数据补全和正文抽取能力。Reader 使用独立 Browser 和有界队列，每次读取
-创建独立 BrowserContext，且不会把请求上下文中的 Cookie 写回托管 state；截图、保存
-格式和归档队列等 Archiver 语义不会进入 Reader。Monitor 和 Archiver 继续使用原有后台
-队列和浏览器并发控制。Reader 在首次读取时按需启动，MCP 未使用时不会影响主服务健康
-状态。
+ReaderWorker 与 Archiver 是共同继承 `ZhihuContentWorker` 的兄弟 worker，复用知乎页面
+访问、元数据补全和正文抽取能力。Reader 同时负责个人列表的结构化读取，使用独立
+Browser 和有界队列，每次读取创建独立 BrowserContext，且不会把请求上下文中的 Cookie
+写回托管 state；截图、保存格式和归档队列等 Archiver 语义不会进入 Reader。Monitor 和
+Archiver 继续使用原有后台队列和浏览器并发控制。Reader 在首次读取时按需启动，MCP
+未使用时不会影响主服务健康状态。
+
+个人列表由登录 BrowserContext 直接请求知乎 JSON API，并按回答、文章、想法和收藏夹
+动态设置对应页面 Referer。默认在相邻请求间等待 2～3 秒，相同分页缓存 30 秒；收到
+403 或 429 后停止继续请求，并按 `Retry-After` 和指数退避进入最长 15 分钟的本地冷却。
+可通过同名大写环境变量调整 `profile_request_min_interval_seconds`、
+`profile_request_jitter_seconds`、`profile_cache_ttl_seconds`、
+`profile_cooldown_base_seconds` 和 `profile_cooldown_max_seconds`。
 
 登录二维码页面示例：
 

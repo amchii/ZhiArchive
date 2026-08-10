@@ -3,12 +3,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import archive.core.reader as reader_module
 from archive.core.archiver import Archiver, TextArchive, ZhihuContentWorker
 from archive.core.base import TargetType
+from archive.core.profile import (
+    ProfileContentType,
+    ProfilePage,
+    ProfileRateLimitError,
+)
 from archive.core.reader import (
+    ProfileReaderJob,
     ReaderAuthStateError,
     ReaderError,
     ReaderJob,
+    ReaderProfileCooldownError,
     ReaderRequestCancelledError,
     ReaderWorker,
 )
@@ -175,4 +183,180 @@ async def test_reader_caller_cancellation_stops_active_browser_work() -> None:
 
     assert job.cancel_event.is_set()
     assert read_cancelled.is_set()
+    worker.queue.task_done()
+
+
+@pytest.mark.asyncio
+async def test_reader_profile_uses_independent_context(monkeypatch, tmp_path) -> None:
+    """验证个人列表复用 Reader Browser，但每次关闭独立 Context。"""
+    worker = ReaderWorker(init_state_path=tmp_path / "zhihu.state.json")
+    worker.auth_state.status = AsyncMock(
+        return_value={"configured": True, "valid": True, "error": None}
+    )
+    browser = MagicMock()
+    context = MagicMock()
+    context.close = AsyncMock()
+    worker._ensure_browser = AsyncMock(return_value=browser)
+    worker._new_reader_context = AsyncMock(return_value=context)
+    expected = ProfilePage(
+        people="target-user",
+        content_type=ProfileContentType.ANSWER,
+        items=[],
+        offset=0,
+        limit=20,
+        total=0,
+        has_more=False,
+        next_cursor=None,
+    )
+    read_page = AsyncMock(return_value=expected)
+    monkeypatch.setattr(reader_module, "read_profile_page", read_page)
+
+    result = await worker._read_profile(
+        content_type=ProfileContentType.ANSWER,
+        people="target-user",
+        offset=0,
+        limit=20,
+        collection_id=None,
+        headless=True,
+    )
+    cached_result = await worker._read_profile(
+        content_type=ProfileContentType.ANSWER,
+        people="target-user",
+        offset=0,
+        limit=20,
+        collection_id=None,
+        headless=True,
+    )
+
+    assert result is expected
+    assert cached_result == expected
+    assert cached_result is not expected
+    worker._ensure_browser.assert_awaited_once_with(True)
+    worker._new_reader_context.assert_awaited_once_with(browser)
+    read_page.assert_awaited_once_with(
+        context.request,
+        content_type=ProfileContentType.ANSWER,
+        people="target-user",
+        offset=0,
+        limit=20,
+        collection_id=None,
+        timeout=worker.page_default_timeout,
+    )
+    context.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_reader_profile_applies_minimum_interval_and_jitter(
+    monkeypatch,
+) -> None:
+    """验证连续个人列表请求会等待最小间隔及随机抖动。"""
+    worker = ReaderWorker(
+        profile_request_min_interval_seconds=2,
+        profile_request_jitter_seconds=1,
+    )
+    worker._profile_last_request_at = asyncio.get_running_loop().time()
+    sleep = AsyncMock()
+    monkeypatch.setattr(reader_module.random, "uniform", lambda _start, _end: 0.5)
+    monkeypatch.setattr(reader_module.asyncio, "sleep", sleep)
+
+    await worker._wait_for_profile_request_slot()
+
+    sleep.assert_awaited_once()
+    assert sleep.await_args.args[0] == pytest.approx(2.5, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_reader_profile_opens_circuit_after_rate_limit(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证 403/429 后续请求会在本地冷却期内直接失败。"""
+    worker = ReaderWorker(
+        init_state_path=tmp_path / "zhihu.state.json",
+        profile_cache_ttl_seconds=0,
+        profile_cooldown_base_seconds=60,
+        profile_cooldown_max_seconds=300,
+    )
+    worker.auth_state.status = AsyncMock(
+        return_value={"configured": True, "valid": True, "error": None}
+    )
+    browser = MagicMock()
+    context = MagicMock()
+    context.close = AsyncMock()
+    worker._ensure_browser = AsyncMock(return_value=browser)
+    worker._new_reader_context = AsyncMock(return_value=context)
+    read_page = AsyncMock(
+        side_effect=ProfileRateLimitError(
+            "请求过于频繁",
+            status=429,
+            retry_after=120,
+        )
+    )
+    monkeypatch.setattr(reader_module, "read_profile_page", read_page)
+
+    with pytest.raises(ProfileRateLimitError):
+        await worker._read_profile(
+            content_type=ProfileContentType.PIN,
+            people="target-user",
+            offset=0,
+            limit=20,
+            collection_id=None,
+            headless=True,
+        )
+    with pytest.raises(ReaderProfileCooldownError, match="冷却"):
+        await worker._read_profile(
+            content_type=ProfileContentType.PIN,
+            people="target-user",
+            offset=20,
+            limit=20,
+            collection_id=None,
+            headless=True,
+        )
+
+    worker._ensure_browser.assert_awaited_once_with(True)
+    worker._new_reader_context.assert_awaited_once_with(browser)
+    read_page.assert_awaited_once()
+    context.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_submit_profile_uses_shared_reader_queue() -> None:
+    """验证个人列表请求进入现有 Reader 有界队列并按类型分派。"""
+    worker = ReaderWorker()
+    worker._ready.set()
+    expected = ProfilePage(
+        people="target-user",
+        content_type=ProfileContentType.PIN,
+        items=[],
+        offset=0,
+        limit=20,
+        total=0,
+        has_more=False,
+        next_cursor=None,
+    )
+    worker._read_profile = AsyncMock(return_value=expected)
+    submit_task = asyncio.create_task(
+        worker.submit_profile(
+            content_type=ProfileContentType.PIN,
+            people="target-user",
+            offset=0,
+            limit=20,
+            collection_id=None,
+            timeout=30,
+        )
+    )
+    job = await worker.queue.get()
+
+    assert isinstance(job, ProfileReaderJob)
+    result = await worker._execute_job(job, headless=True)
+    job.future.set_result(result)
+    assert await submit_task is expected
+    worker._read_profile.assert_awaited_once_with(
+        content_type=ProfileContentType.PIN,
+        people="target-user",
+        offset=0,
+        limit=20,
+        collection_id=None,
+        headless=True,
+    )
     worker.queue.task_done()

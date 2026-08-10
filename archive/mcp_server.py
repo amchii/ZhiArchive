@@ -3,23 +3,33 @@ import pathlib
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 import aiofiles
 from mcp.server.fastmcp import FastMCP, Image
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from archive.config import settings
 from archive.core.base import TargetType
+from archive.core.profile import (
+    ProfileContentType,
+    ProfilePage,
+    decode_profile_cursor,
+    normalize_collection_id,
+    normalize_people,
+    validate_profile_limit,
+)
 from archive.services import get_current_services, new_qrcode_task
 
 if TYPE_CHECKING:
     from archive.services import AppServices
 
 MAX_QRCODE_BYTES = 1024 * 1024
+ProfilePageLimit = Annotated[int, Field(ge=1, le=20)]
 MCPToolFunction = Callable[..., Any]
 MCPToolRegistration = tuple[
     MCPToolFunction,
@@ -184,6 +194,103 @@ async def read_zhihu_content(
         truncated=next_offset is not None,
         next_offset=next_offset,
     )
+
+
+async def resolve_profile_people(
+    services: "AppServices",
+    people: str | None,
+) -> str:
+    """解析 MCP 个人列表工具使用的知乎用户 ID。
+
+    Args:
+        services: 当前主服务容器。
+        people: 调用方显式指定的用户 ID；为空时读取全局配置。
+    """
+    if people is not None:
+        return normalize_people(people)
+    configs = await services.store.get_settings("global")
+    return normalize_people(str(configs.get("people") or settings.people))
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
+async def list_zhihu_profile_items(
+    content_type: Literal["answer", "article", "pin", "collection"],
+    people: str | None = None,
+    cursor: str | None = None,
+    limit: ProfilePageLimit = 20,
+) -> ProfilePage:
+    """分页查看知乎用户发布的回答、文章、想法或收藏夹。
+
+    Args:
+        content_type: 列表类型：answer、article、pin 或 collection。
+        people: 知乎个人主页 URL 中 `/people/` 后的标识；省略时使用全局目标用户。
+        cursor: 上一页返回的 next_cursor；第一页省略。
+        limit: 单页条目数，范围 1 到 20。
+    """
+    services = require_services()
+    try:
+        resolved_people = await resolve_profile_people(services, people)
+        offset = decode_profile_cursor(cursor)
+        validate_profile_limit(limit)
+        profile_type = ProfileContentType(content_type)
+        config = await services.mcp_config.get_config()
+        await services.ensure_reader_started()
+        return await services.reader.submit_profile(
+            content_type=profile_type,
+            people=resolved_people,
+            offset=offset,
+            limit=limit,
+            collection_id=None,
+            timeout=config["reader_timeout_seconds"],
+        )
+    except (RuntimeError, ValueError) as error:
+        raise ToolError(str(error)) from error
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
+async def list_zhihu_collection_items(
+    collection_id: str,
+    cursor: str | None = None,
+    limit: ProfilePageLimit = 20,
+) -> ProfilePage:
+    """分页查看一个知乎收藏夹中的内容。
+
+    Args:
+        collection_id: list_zhihu_profile_items 返回的收藏夹 ID。
+        cursor: 上一页返回的 next_cursor；第一页省略。
+        limit: 单页条目数，范围 1 到 20。
+    """
+    services = require_services()
+    try:
+        normalized_collection_id = normalize_collection_id(collection_id)
+        offset = decode_profile_cursor(cursor)
+        validate_profile_limit(limit)
+        config = await services.mcp_config.get_config()
+        await services.ensure_reader_started()
+        return await services.reader.submit_profile(
+            content_type=ProfileContentType.COLLECTION_ITEM,
+            people=None,
+            offset=offset,
+            limit=limit,
+            collection_id=normalized_collection_id,
+            timeout=config["reader_timeout_seconds"],
+        )
+    except (RuntimeError, ValueError) as error:
+        raise ToolError(str(error)) from error
 
 
 @register_mcp_tool(
@@ -381,8 +488,9 @@ def create_mcp_server() -> FastMCP:
     server = FastMCP(
         "ZhiArchive",
         instructions=(
-            "使用已由 ZhiArchive 主服务托管的知乎登录态读取内容、提交归档任务，"
-            "并按需发起二维码登录。即时读取只支持知乎回答和专栏文章。"
+            "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文和个人内容列表、"
+            "提交归档任务，并按需发起二维码登录。正文读取支持知乎回答和专栏文章；"
+            "个人列表支持回答、文章、想法、收藏夹及收藏夹内容。"
         ),
         streamable_http_path="/",
         stateless_http=True,

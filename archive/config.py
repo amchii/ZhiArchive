@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # 是否使用无头模式
     archiver_headless: bool = True
     reader_headless: bool = True
+    profile_request_min_interval_seconds: float = 2.0
+    profile_request_jitter_seconds: float = 1.0
+    profile_cache_ttl_seconds: float = 30.0
+    profile_cooldown_base_seconds: float = 60.0
+    profile_cooldown_max_seconds: float = 15 * 60.0
     monitor_headless: bool = True
     login_worker_headless: bool = True
     log_level: Annotated[

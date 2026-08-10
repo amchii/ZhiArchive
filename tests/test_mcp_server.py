@@ -9,11 +9,14 @@ import archive.api.app as app_module
 from archive.api import security
 from archive.core.archiver import TextArchive
 from archive.core.base import TargetType
+from archive.core.profile import ProfileContentType, ProfilePage
 from archive.mcp_server import (
     MCPBearerAuthMiddleware,
     create_mcp_server,
     enqueue_zhihu_archive,
     get_zhihu_login_qrcode,
+    list_zhihu_collection_items,
+    list_zhihu_profile_items,
     read_zhihu_content,
 )
 from archive.services import AppServices
@@ -28,6 +31,8 @@ async def test_mcp_exposes_expected_zhihu_tools() -> None:
 
     assert tools == {
         "read_zhihu_content",
+        "list_zhihu_profile_items",
+        "list_zhihu_collection_items",
         "get_zhihu_auth_status",
         "enqueue_zhihu_archive",
         "get_zhihu_archive_task",
@@ -80,6 +85,91 @@ async def test_read_content_applies_main_service_pagination(monkeypatch) -> None
         timeout=30,
     )
     services.ensure_reader_started.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_list_profile_items_uses_current_people_and_reader(monkeypatch) -> None:
+    """验证个人列表默认读取全局用户并复用 Reader 超时配置。"""
+    services = MagicMock()
+    services.store.get_settings = AsyncMock(return_value={"people": "target-user"})
+    services.mcp_config.get_config = AsyncMock(
+        return_value={"reader_timeout_seconds": 45}
+    )
+    services.ensure_reader_started = AsyncMock()
+    expected = ProfilePage(
+        people="target-user",
+        content_type=ProfileContentType.ANSWER,
+        items=[],
+        offset=20,
+        limit=10,
+        total=20,
+        has_more=False,
+        next_cursor=None,
+    )
+    services.reader.submit_profile = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await list_zhihu_profile_items(
+        "answer",
+        cursor="20",
+        limit=10,
+    )
+
+    assert result is expected
+    services.store.get_settings.assert_awaited_once_with("global")
+    services.reader.submit_profile.assert_awaited_once_with(
+        content_type=ProfileContentType.ANSWER,
+        people="target-user",
+        offset=20,
+        limit=10,
+        collection_id=None,
+        timeout=45,
+    )
+    services.ensure_reader_started.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_list_collection_items_validates_id_and_uses_reader(monkeypatch) -> None:
+    """验证收藏夹内容工具只接受数字 ID 并复用 Reader。"""
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={"reader_timeout_seconds": 30}
+    )
+    services.ensure_reader_started = AsyncMock()
+    expected = ProfilePage(
+        people=None,
+        content_type=ProfileContentType.COLLECTION_ITEM,
+        items=[],
+        offset=0,
+        limit=20,
+        total=0,
+        has_more=False,
+        next_cursor=None,
+        collection_id="123",
+    )
+    services.reader.submit_profile = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await list_zhihu_collection_items("123")
+
+    assert result is expected
+    services.reader.submit_profile.assert_awaited_once_with(
+        content_type=ProfileContentType.COLLECTION_ITEM,
+        people=None,
+        offset=0,
+        limit=20,
+        collection_id="123",
+        timeout=30,
+    )
+    with pytest.raises(ToolError, match="收藏夹 ID"):
+        await list_zhihu_collection_items("not-a-number")
+    assert services.reader.submit_profile.await_count == 1
 
 
 async def call_middleware(
@@ -229,6 +319,8 @@ def test_mcp_initialize_uses_token_rotated_by_main_service(
     assert tools_response.status_code == 200
     assert {tool["name"] for tool in tools_response.json()["result"]["tools"]} == {
         "read_zhihu_content",
+        "list_zhihu_profile_items",
+        "list_zhihu_collection_items",
         "get_zhihu_auth_status",
         "enqueue_zhihu_archive",
         "get_zhihu_archive_task",
