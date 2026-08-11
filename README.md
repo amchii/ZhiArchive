@@ -269,7 +269,16 @@ Token 明文只在生成或轮换时显示一次，主服务仅在 SQLite 中保
   省略用户 ID 时使用当前全局目标用户。
 - `list_zhihu_collection_items`：使用收藏夹 ID 分页查看其中的内容。
 - `get_zhihu_auth_status`：读取不包含 Cookie 的登录态摘要。
-- `enqueue_zhihu_archive`、`get_zhihu_archive_task`：提交并查询现有归档任务。
+- `get_zhihu_archiver_status`、`resume_zhihu_archiver`：读取 Archiver 的暂停、
+  运行和后台任务状态，并恢复队列运行。
+- `enqueue_zhihu_archive`、`get_zhihu_archive_task`：提交并查询现有归档任务；
+  入队和查询结果均包含当前 Archiver 状态，完成任务还会返回归档目录及截图、
+  元信息、HTML、Markdown 等已生成文件。归档目录相对于 `results/`，文件信息仅为
+  文件名，不表示 MCP 客户端可以通过服务器文件系统路径访问内容。
+- `read_zhihu_archive_artifact`：通过已完成任务 ID 分页读取 `info`、`markdown`
+  或 `html` 文本产物。
+- `get_zhihu_archive_screenshot`：通过已完成任务 ID 直接获取 MCP Image 截图；
+  两个产物工具均不接受调用方提供的文件路径。
 - `start_zhihu_login`、`get_zhihu_login_status`、`get_zhihu_login_qrcode`：发起并完成二维码登录。
 
 ReaderWorker 与 Archiver 是共同继承 `ZhihuContentWorker` 的兄弟 worker，复用知乎页面

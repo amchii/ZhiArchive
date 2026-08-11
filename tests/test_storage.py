@@ -71,7 +71,42 @@ async def test_schema_v1_removes_login_task_state_path(tmp_path) -> None:
         "qrcode_path": "/tmp/code.png",
         "status": "failed",
     }
-    assert version[0] == 2
+    assert version[0] == 3
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_schema_v2_adds_archive_task_result(tmp_path) -> None:
+    """验证 v2 数据库升级后可持久化归档产物信息。"""
+    database_path = tmp_path / "zhi.sqlite3"
+    with sqlite3.connect(database_path) as database:
+        database.executescript(
+            """
+            CREATE TABLE archive_tasks (
+                id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                dedupe_key TEXT UNIQUE,
+                status TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                next_attempt_at TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT
+            );
+            PRAGMA user_version=2;
+            """
+        )
+    store = SQLiteStore(database_path)
+
+    await store.connect()
+    connection = await store._connection()
+    columns_cursor = await connection.execute("PRAGMA table_info(archive_tasks)")
+    columns = await columns_cursor.fetchall()
+    version = await (await connection.execute("PRAGMA user_version")).fetchone()
+
+    assert "result" in {column["name"] for column in columns}
+    assert version[0] == 3
     await store.close()
 
 
@@ -127,6 +162,29 @@ async def test_running_tasks_are_recovered_on_startup(tmp_path) -> None:
 
     recovered = await store.claim_archive_task()
     assert recovered["id"] == "task-id"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_archive_task_persists_result(tmp_path) -> None:
+    """验证完成任务会持久化归档目录与文件路径。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.enqueue_archive_item(make_item("task-id"))
+    result = {
+        "archive_path": "someone/archives/example",
+        "files": {
+            "screenshot": "example.jpeg",
+            "info": "info.json",
+        },
+    }
+
+    await store.mark_archive_task_done("task-id", result)
+
+    task = await store.get_archive_task("task-id")
+    assert task is not None
+    assert task["status"] == "done"
+    assert task["result"] == result
     await store.close()
 
 

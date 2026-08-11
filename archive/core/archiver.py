@@ -10,7 +10,7 @@ from urllib import parse
 
 import aiofiles
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import Page, Route, async_playwright
+from playwright.async_api import Page, Playwright, Route, async_playwright
 from playwright_stealth import Stealth
 
 from archive.config import default, settings
@@ -49,6 +49,13 @@ class TextArchive(TypedDict):
     target_type: str
     html: str
     markdown: str
+
+
+class ArchiveResult(TypedDict):
+    """表示一次归档成功后的 results 相对目录和文件名。"""
+
+    archive_path: str
+    files: dict[str, str]
 
 
 def format_text_archive_html(archive: TextArchive) -> str:
@@ -826,7 +833,11 @@ class Archiver(ZhihuContentWorker):
             "markdown": markdown_filename,
         }
 
-    async def store_one(self, item: ActivityItem, page: Page) -> Page | None:
+    async def store_one(
+        self,
+        item: ActivityItem,
+        page: Page,
+    ) -> ArchiveResult | None:
         """
         打开并保存一个回答或文章归档。
 
@@ -921,15 +932,34 @@ class Archiver(ZhihuContentWorker):
         await page.keyboard.press("PageDown")
         await asyncio.sleep(0.5)
         await page.keyboard.press("PageDown")
-        return page
+        results_root = pathlib.Path(self._base_results_dir).expanduser().resolve()
+        archive_path = target_dir.resolve().relative_to(results_root).as_posix()
+        files = {
+            "screenshot": screenshot_path.name,
+            "info": info_path.name,
+        }
+        files.update(text_archive_files)
+        return ArchiveResult(
+            archive_path=archive_path,
+            files=files,
+        )
 
     async def store(
         self,
-        playwright,
-        item_list: list["ActivityItem"],
-        headless=True,
-        **context_extra,
-    ):
+        playwright: Playwright,
+        item_list: list[ActivityItem],
+        headless: bool = True,
+        **context_extra: object,
+    ) -> list[ArchiveResult]:
+        """依次归档一组任务并返回每条任务的产物信息。
+
+        Args:
+            playwright: 当前 Playwright 驱动。
+            item_list: 待归档的动态数据。
+            headless: 是否使用无头浏览器。
+            **context_extra: 创建浏览器上下文时使用的额外参数。
+        """
+        results: list[ArchiveResult] = []
         async with self.get_context(
             playwright,
             browser_headless=headless,
@@ -941,12 +971,15 @@ class Archiver(ZhihuContentWorker):
                 # 每个对象都新开一个标签页
                 page = await self.new_page(context)
                 try:
-                    await self.store_one(item, page=page)
+                    result = await self.store_one(item, page=page)
+                    if result is not None:
+                        results.append(result)
                 finally:
                     await page.close()
                 await asyncio.sleep(1)
             self.logger.info("Fetch done")
             await empty_page.close()
+        return results
 
     async def run_queue(
         self,
@@ -980,7 +1013,7 @@ class Archiver(ZhihuContentWorker):
                     await self.configurator.load_to_worker(include_global=False)
                     async with Stealth().use_async(async_playwright()) as playwright:
                         if self.browser_semaphore is None:
-                            await self.store(
+                            results = await self.store(
                                 playwright,
                                 [task.payload],
                                 headless,
@@ -988,12 +1021,14 @@ class Archiver(ZhihuContentWorker):
                             )
                         else:
                             async with self.browser_semaphore:
-                                await self.store(
+                                results = await self.store(
                                     playwright,
                                     [task.payload],
                                     headless,
                                     **context_extra,
                                 )
+                    if not results:
+                        raise RuntimeError("归档任务未生成任何产物")
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
@@ -1003,7 +1038,10 @@ class Archiver(ZhihuContentWorker):
                         str(error),
                     )
                 else:
-                    await self.sqlite_store.mark_archive_task_done(task.task_name)
+                    await self.sqlite_store.mark_archive_task_done(
+                        task.task_name,
+                        results[0],
+                    )
 
             await self.set_status(WorkStatus.WAITING)
             if not claimed_any:

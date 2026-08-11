@@ -117,7 +117,9 @@ Compose 必须固定一个 Uvicorn worker、一个容器副本；用户绕过标
 
 MCP Server 作为 FastAPI 下的 Streamable HTTP 子应用运行，使用主服务管理的独立
 Bearer Token。Reader 持有独立 Browser 和有界请求队列，不领取
-`archive_tasks`，也不写回 Playwright storage state。
+`archive_tasks`，也不写回 Playwright storage state。归档产物读取只接受已完成任务
+ID 和受限产物类型，通过与结果浏览器共用的路径解析模块校验作用域、路径穿越和
+符号链接，不向 MCP 调用方开放任意结果路径或服务器文件系统路径。
 
 API 路由直接访问 `AppServices`，不再为每个请求构造临时 Worker 或存储客户端。
 
@@ -256,6 +258,7 @@ Reader 转发。MCP 开关、正文上限、Reader 超时和 Token 摘要保存�
 | `status` | `pending`、`running`、`done` 或 `failed` |
 | `attempts` | 已尝试次数 |
 | `last_error` | 最近一次错误，可为空 |
+| `result` | 成功归档后的相对目录和文件名 JSON，可为空 |
 | `next_attempt_at` | 下次允许重试的时间，可为空 |
 | `created_at` | 创建时间 |
 | `started_at` | 最近一次开始时间，可为空 |

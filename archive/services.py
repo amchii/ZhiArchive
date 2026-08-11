@@ -44,6 +44,7 @@ class AppServices:
         self.archiver.browser_semaphore = self.worker_browser_semaphore
         self.monitor_task: asyncio.Task[Any] | None = None
         self.archiver_task: asyncio.Task[Any] | None = None
+        self.archiver_start_lock = asyncio.Lock()
         self.reader_task: asyncio.Task[Any] | None = None
         self.reader_start_task: asyncio.Task[None] | None = None
         self.reader_start_lock = asyncio.Lock()
@@ -66,13 +67,7 @@ class AppServices:
                 "monitor",
                 self.monitor.run(headless=settings.monitor_headless),
             )
-            self.archiver_task = self._create_supervised_task(
-                "archiver",
-                self.archiver.run_queue(
-                    self.archive_event,
-                    headless=settings.archiver_headless,
-                ),
-            )
+            self.archiver_task = self._start_archiver_worker()
             if await self.store.has_pending_archive_tasks():
                 self.archive_event.set()
         except BaseException:
@@ -97,6 +92,43 @@ class AppServices:
                 start_task.add_done_callback(self._on_reader_start_done)
                 self.reader_start_task = start_task
         await asyncio.shield(start_task)
+
+    def _start_archiver_worker(self) -> asyncio.Task[Any]:
+        """创建受监督的 Archiver 队列任务。"""
+        return self._create_supervised_task(
+            "archiver",
+            self.archiver.run_queue(
+                self.archive_event,
+                headless=settings.archiver_headless,
+            ),
+        )
+
+    async def get_archiver_status(self) -> dict[str, Any]:
+        """返回 MCP 可安全展示的 Archiver 运行状态。"""
+        control = await self.store.get_worker_control("archiver")
+        task = self.archiver_task
+        return {
+            "paused": bool(control["paused"]),
+            "status": str(control["status"]),
+            "worker_alive": task is not None and not task.done(),
+            "last_error": control["last_error"] or self.worker_errors.get("archiver"),
+        }
+
+    async def resume_archiver(self) -> dict[str, Any]:
+        """解除 Archiver 暂停状态，必要时重启异常退出的队列任务。"""
+        async with self.archiver_start_lock:
+            task = self.archiver_task
+            if task is None or task.done():
+                await self.store.recover_running_archive_tasks()
+                await self.store.set_worker_status(
+                    "archiver",
+                    WorkStatus.WAITING.value,
+                )
+                self.worker_errors.pop("archiver", None)
+                self.archiver_task = self._start_archiver_worker()
+            await self.archiver.resume()
+            self.archive_event.set()
+        return await self.get_archiver_status()
 
     def _on_reader_start_done(self, task: asyncio.Task[None]) -> None:
         """回收无人等待的 Reader 启动异常，避免调用方取消后泄漏任务错误。

@@ -470,13 +470,21 @@ async def test_store_one_continues_when_text_archive_write_fails(tmp_path) -> No
         "people": "someone",
     }
 
-    await archiver.store_one(item, page)
+    result = await archiver.store_one(item, page)
 
     page.screenshot.assert_awaited_once()
     info_files = list(tmp_path.rglob("info.json"))
     assert len(info_files) == 1
     info = json.loads(info_files[0].read_text(encoding="utf-8"))
     assert info["text_archive"] == {}
+    assert result is not None
+    assert (
+        result["archive_path"] == info_files[0].parent.relative_to(tmp_path).as_posix()
+    )
+    assert result["files"] == {
+        "screenshot": f"{info_files[0].parent.name}.jpeg",
+        "info": "info.json",
+    }
 
 
 @pytest.mark.asyncio

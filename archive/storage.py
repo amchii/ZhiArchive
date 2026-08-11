@@ -12,7 +12,7 @@ from archive.config import settings
 from archive.utils.common import dt_fromisoformat, dt_toisoformat
 from archive.utils.encoder import JSONEncoder
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TASK_RETRY_DELAYS = [timedelta(seconds=30), timedelta(minutes=5)]
 MAX_TASK_ATTEMPTS = 3
 ActivityItem = dict[str, Any]
@@ -169,6 +169,7 @@ class SQLiteStore:
                 status TEXT NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 last_error TEXT,
+                result TEXT,
                 next_attempt_at TEXT,
                 created_at TEXT NOT NULL,
                 started_at TEXT,
@@ -207,38 +208,70 @@ class SQLiteStore:
             db: 当前 SQLite 连接。
             version: 数据库当前 schema 版本。
         """
-        if version != 1:
-            raise RuntimeError(f"Unsupported SQLite schema version: {version}")
-        await db.execute("BEGIN IMMEDIATE")
-        try:
-            await db.execute(
-                """
-                CREATE TABLE login_tasks_v2 (
-                    id TEXT PRIMARY KEY,
-                    qrcode_path TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    last_error TEXT,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
+        if version == 1:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                await db.execute(
+                    """
+                    CREATE TABLE login_tasks_v2 (
+                        id TEXT PRIMARY KEY,
+                        qrcode_path TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        last_error TEXT,
+                        created_at TEXT NOT NULL,
+                        expires_at TEXT NOT NULL
+                    )
+                    """
                 )
-                """
-            )
-            await db.execute(
-                """
-                INSERT INTO login_tasks_v2
-                    (id, qrcode_path, status, last_error, created_at, expires_at)
-                SELECT id, qrcode_path, status, last_error, created_at, expires_at
-                FROM login_tasks
-                """
-            )
-            await db.execute("DROP TABLE login_tasks")
-            await db.execute("ALTER TABLE login_tasks_v2 RENAME TO login_tasks")
-            await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-        except BaseException:
-            await db.rollback()
-            raise
-        else:
+                await db.execute(
+                    """
+                    INSERT INTO login_tasks_v2
+                        (id, qrcode_path, status, last_error, created_at, expires_at)
+                    SELECT id, qrcode_path, status, last_error, created_at, expires_at
+                    FROM login_tasks
+                    """
+                )
+                await db.execute("DROP TABLE login_tasks")
+                await db.execute("ALTER TABLE login_tasks_v2 RENAME TO login_tasks")
+                await db.execute("PRAGMA user_version=2")
+            except BaseException:
+                await db.rollback()
+                raise
+            else:
+                await db.commit()
+            version = 2
+
+        if version == 2:
+            await db.execute("BEGIN IMMEDIATE")
+            try:
+                table = await (
+                    await db.execute(
+                        """
+                        SELECT 1
+                        FROM sqlite_master
+                        WHERE type = 'table' AND name = 'archive_tasks'
+                        """
+                    )
+                ).fetchone()
+                if table is not None:
+                    columns = await (
+                        await db.execute("PRAGMA table_info(archive_tasks)")
+                    ).fetchall()
+                    if "result" not in {column["name"] for column in columns}:
+                        await db.execute(
+                            "ALTER TABLE archive_tasks ADD COLUMN result TEXT"
+                        )
+                await db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+            except BaseException:
+                await db.rollback()
+                raise
+            else:
+                await db.commit()
+            await self._create_schema(db)
             await db.commit()
+            return
+
+        raise RuntimeError(f"Unsupported SQLite schema version: {version}")
 
     async def seed_defaults(self) -> None:
         """首次建库时写入运行时默认配置和 worker 控制行。"""
@@ -344,6 +377,34 @@ class SQLiteStore:
             )
         ).fetchone()
         return row["status"] if row else "waiting"
+
+    async def get_worker_control(self, name: str) -> dict[str, Any]:
+        """读取 worker 的暂停、运行和错误状态。
+
+        Args:
+            name: worker 名称。
+        """
+        db = await self._connection()
+        row = await (
+            await db.execute(
+                """
+                SELECT paused, status, last_error, updated_at
+                FROM worker_control
+                WHERE name = ?
+                """,
+                (name,),
+            )
+        ).fetchone()
+        if row is None:
+            return {
+                "paused": True,
+                "status": "waiting",
+                "last_error": None,
+                "updated_at": None,
+            }
+        control = dict(row)
+        control["paused"] = bool(control["paused"])
+        return control
 
     async def set_worker_paused(self, name: str, paused: bool) -> None:
         """持久化 worker 暂停状态。"""
@@ -594,7 +655,7 @@ class SQLiteStore:
             await db.execute(
                 """
                 SELECT id, payload, status, attempts, last_error,
-                       created_at, started_at, finished_at
+                       result, created_at, started_at, finished_at
                 FROM archive_tasks
                 WHERE id = ?
                 """,
@@ -605,6 +666,7 @@ class SQLiteStore:
             return None
         task = dict(row)
         task["payload"] = json.loads(task["payload"])
+        task["result"] = json.loads(task["result"]) if task["result"] else None
         return task
 
     async def claim_archive_task(self) -> dict[str, Any] | None:
@@ -640,17 +702,35 @@ class SQLiteStore:
                 "attempts": row["attempts"],
             }
 
-    async def mark_archive_task_done(self, task_id: str) -> None:
-        """把归档任务标记为完成。"""
+    async def mark_archive_task_done(
+        self,
+        task_id: str,
+        result: dict[str, Any] | None = None,
+    ) -> None:
+        """把归档任务标记为完成并保存产物信息。
+
+        Args:
+            task_id: 归档任务 ID。
+            result: 归档目录与文件路径等产物信息。
+        """
         now = utcnow_iso()
         async with self.transaction() as db:
             await db.execute(
                 """
                 UPDATE archive_tasks
-                SET status = 'done', finished_at = ?, next_attempt_at = NULL
+                SET status = 'done',
+                    result = ?,
+                    finished_at = ?,
+                    next_attempt_at = NULL
                 WHERE id = ?
                 """,
-                (now, task_id),
+                (
+                    json.dumps(result, ensure_ascii=False, cls=JSONEncoder)
+                    if result is not None
+                    else None,
+                    now,
+                    task_id,
+                ),
             )
 
     async def mark_archive_task_failed(self, task_id: str, error: str) -> None:
@@ -694,6 +774,7 @@ class SQLiteStore:
                 SET status = 'pending',
                     attempts = 0,
                     last_error = NULL,
+                    result = NULL,
                     next_attempt_at = NULL,
                     started_at = NULL,
                     finished_at = NULL

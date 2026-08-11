@@ -29,14 +29,24 @@ from archive.core.profile import (
     validate_profile_limit,
 )
 from archive.core.question import QuestionResult, parse_question_url
+from archive.result_files import (
+    MAX_TEXT_PREVIEW_SIZE,
+    ResultPathError,
+    ResultPreviewType,
+    get_preview_type,
+    resolve_result_file_path,
+)
 from archive.services import get_current_services, new_qrcode_task
 
 if TYPE_CHECKING:
     from archive.services import AppServices
 
 MAX_QRCODE_BYTES = 1024 * 1024
+MAX_ARCHIVE_IMAGE_BYTES = 20 * 1024 * 1024
 ProfilePageLimit = Annotated[int, Field(ge=1, le=20)]
 HotListLimit = Annotated[int, Field(ge=1, le=HOT_LIST_MAX_ITEMS)]
+ArchiveTextArtifact = Literal["info", "markdown", "html"]
+ArchiveArtifact = Literal["info", "markdown", "html", "screenshot"]
 MCPToolFunction = Callable[..., Any]
 MCPToolRegistration = tuple[
     MCPToolFunction,
@@ -75,6 +85,15 @@ class AuthStatusResult(BaseModel):
     error: str | None
 
 
+class ArchiverStatusResult(BaseModel):
+    """表示 Archiver 后台队列的暂停和运行状态。"""
+
+    paused: bool
+    status: str
+    worker_alive: bool
+    last_error: str | None = None
+
+
 class ArchiveTaskResult(BaseModel):
     """表示 MCP 提交或查询到的归档任务。"""
 
@@ -82,8 +101,31 @@ class ArchiveTaskResult(BaseModel):
     url: str
     target_type: str
     status: str
+    archiver: ArchiverStatusResult
     attempts: int = 0
     error: str | None = None
+    archive_path: str | None = Field(
+        default=None,
+        description="相对于 ZhiArchive results 根目录的归档目录标识",
+    )
+    files: dict[str, str] = Field(
+        default_factory=dict,
+        description="归档产物类型与文件名，不表示客户端可访问服务器文件系统",
+    )
+
+
+class ArchiveArtifactResult(BaseModel):
+    """表示 MCP 分页返回的一份归档文本产物。"""
+
+    task_id: str
+    artifact: ArchiveTextArtifact
+    filename: str
+    content_format: Literal["json", "markdown", "html"]
+    content: str
+    offset: int
+    total_chars: int
+    truncated: bool
+    next_offset: int | None
 
 
 class LoginTaskResult(BaseModel):
@@ -372,6 +414,34 @@ async def get_zhihu_auth_status() -> AuthStatusResult:
 
 @register_mcp_tool(
     annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+async def get_zhihu_archiver_status() -> ArchiverStatusResult:
+    """读取 Archiver 是否暂停、后台任务是否存活及当前工作状态。"""
+    status = await require_services().get_archiver_status()
+    return ArchiverStatusResult(**status)
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+async def resume_zhihu_archiver() -> ArchiverStatusResult:
+    """恢复 Archiver 队列运行；后台任务异常退出时也会重新启动。"""
+    status = await require_services().resume_archiver()
+    return ArchiverStatusResult(**status)
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=False,
@@ -379,7 +449,7 @@ async def get_zhihu_auth_status() -> AuthStatusResult:
     )
 )
 async def enqueue_zhihu_archive(url: str) -> ArchiveTaskResult:
-    """把知乎回答或文章加入现有 Archiver 队列。
+    """把知乎回答或文章加入队列，并返回当前 Archiver 运行状态。
 
     Args:
         url: 知乎回答或专栏文章链接。
@@ -397,6 +467,7 @@ async def enqueue_zhihu_archive(url: str) -> ArchiveTaskResult:
         url=item["target"]["link"],
         target_type=str(target_type),
         status="pending",
+        archiver=ArchiverStatusResult(**(await services.get_archiver_status())),
     )
 
 
@@ -414,10 +485,12 @@ async def get_zhihu_archive_task(task_id: str) -> ArchiveTaskResult:
     Args:
         task_id: enqueue_zhihu_archive 返回的任务 ID。
     """
-    task = await require_services().store.get_archive_task(task_id)
+    services = require_services()
+    task = await services.store.get_archive_task(task_id)
     if task is None:
         raise ToolError("归档任务不存在")
     item = task["payload"]
+    result = task["result"] or {}
     return ArchiveTaskResult(
         task_id=task["id"],
         url=str(item["target"]["link"]),
@@ -425,7 +498,164 @@ async def get_zhihu_archive_task(task_id: str) -> ArchiveTaskResult:
         status=str(task["status"]),
         attempts=int(task["attempts"]),
         error=task["last_error"],
+        archive_path=result.get("archive_path"),
+        files=result.get("files", {}),
+        archiver=ArchiverStatusResult(**(await services.get_archiver_status())),
     )
+
+
+async def resolve_archive_artifact(
+    services: "AppServices",
+    task_id: str,
+    artifact: ArchiveArtifact,
+) -> tuple[pathlib.Path, str]:
+    """从完成任务中安全解析一份归档产物。
+
+    Args:
+        services: 当前主服务容器。
+        task_id: 已完成的归档任务 ID。
+        artifact: 允许读取的产物类型。
+
+    Returns:
+        通过结果目录安全校验的文件路径和文件名。
+    """
+    task = await services.store.get_archive_task(task_id)
+    if task is None:
+        raise ToolError("归档任务不存在")
+    if task["status"] != "done":
+        raise ToolError(f"归档任务尚未完成，当前状态：{task['status']}")
+    result = task["result"]
+    if not isinstance(result, dict):
+        raise ToolError("该完成任务没有可用的归档产物索引")
+    archive_path = result.get("archive_path")
+    files = result.get("files")
+    filename = files.get(artifact) if isinstance(files, dict) else None
+    if not isinstance(archive_path, str) or not isinstance(filename, str):
+        raise ToolError(f"归档任务没有 {artifact} 产物")
+    filename_path = pathlib.PurePosixPath(filename)
+    if (
+        filename_path.is_absolute()
+        or len(filename_path.parts) != 1
+        or filename_path.name in {"", ".", ".."}
+    ):
+        raise ToolError("归档产物索引不合法")
+    relative_path = pathlib.PurePosixPath(archive_path).joinpath(filename)
+    try:
+        target_path, normalized_path = resolve_result_file_path(
+            relative_path.as_posix(),
+            settings.results_dir,
+        )
+    except ResultPathError as error:
+        raise ToolError("归档产物已丢失或不可访问") from error
+    if len(normalized_path.parts) < 3 or normalized_path.parts[1] != "archives":
+        raise ToolError("归档产物索引不合法")
+    if not target_path.is_file():
+        raise ToolError("归档产物已丢失或不可访问")
+    return target_path, filename
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+async def read_zhihu_archive_artifact(
+    task_id: str,
+    artifact: ArchiveTextArtifact,
+    offset: int = 0,
+) -> ArchiveArtifactResult:
+    """分页读取已完成归档任务的 JSON、Markdown 或 HTML 产物。
+
+    Args:
+        task_id: enqueue_zhihu_archive 返回的任务 ID。
+        artifact: info、markdown 或 html。
+        offset: 长文本分页读取时的起始字符位置。
+    """
+    if offset < 0:
+        raise ToolError("offset 不能小于 0")
+    services = require_services()
+    target_path, filename = await resolve_archive_artifact(
+        services,
+        task_id,
+        artifact,
+    )
+    preview_type = get_preview_type(target_path)
+    expected_types = {
+        "info": ResultPreviewType.JSON,
+        "markdown": ResultPreviewType.MARKDOWN,
+        "html": ResultPreviewType.HTML,
+    }
+    if preview_type != expected_types[artifact]:
+        raise ToolError("归档产物类型与索引不匹配")
+    try:
+        if target_path.stat().st_size > MAX_TEXT_PREVIEW_SIZE:
+            raise ToolError("归档文本产物过大，无法通过 MCP 读取")
+        async with aiofiles.open(target_path, "r", encoding="utf-8") as file_obj:
+            content = await file_obj.read()
+    except ToolError:
+        raise
+    except (OSError, UnicodeDecodeError) as error:
+        raise ToolError("归档产物已丢失或无法读取") from error
+    if offset > len(content):
+        raise ToolError("offset 超出归档文本长度")
+    config = await services.mcp_config.get_config()
+    end = min(offset + config["max_content_chars"], len(content))
+    next_offset = end if end < len(content) else None
+    return ArchiveArtifactResult(
+        task_id=task_id,
+        artifact=artifact,
+        filename=filename,
+        content_format={
+            "info": "json",
+            "markdown": "markdown",
+            "html": "html",
+        }[artifact],
+        content=content[offset:end],
+        offset=offset,
+        total_chars=len(content),
+        truncated=next_offset is not None,
+        next_offset=next_offset,
+    )
+
+
+@register_mcp_tool(
+    structured_output=False,
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def get_zhihu_archive_screenshot(task_id: str) -> Image:
+    """读取已完成归档任务的截图并直接返回 MCP Image。
+
+    Args:
+        task_id: enqueue_zhihu_archive 返回的任务 ID。
+    """
+    target_path, _filename = await resolve_archive_artifact(
+        require_services(),
+        task_id,
+        "screenshot",
+    )
+    image_format = {
+        ".jpeg": "jpeg",
+        ".jpg": "jpeg",
+        ".png": "png",
+    }.get(target_path.suffix.lower())
+    if get_preview_type(target_path) != ResultPreviewType.IMAGE or not image_format:
+        raise ToolError("归档截图类型与索引不匹配")
+    try:
+        async with aiofiles.open(target_path, "rb") as file_obj:
+            data = await file_obj.read(MAX_ARCHIVE_IMAGE_BYTES + 1)
+    except OSError as error:
+        raise ToolError("归档截图已丢失或无法读取") from error
+    if len(data) > MAX_ARCHIVE_IMAGE_BYTES:
+        raise ToolError("归档截图过大，无法通过 MCP 返回")
+    return Image(data=data, format=image_format)
 
 
 @register_mcp_tool(
@@ -552,9 +782,10 @@ def create_mcp_server() -> FastMCP:
         "ZhiArchive",
         instructions=(
             "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文、问题、热榜和个人"
-            "内容列表、提交归档任务，并按需发起二维码登录。正文读取支持知乎回答和"
-            "专栏文章；问题读取返回问题描述、话题和统计；热榜最多返回三十个问题；"
-            "个人列表支持回答、文章、想法、收藏夹及收藏夹内容。"
+            "内容列表、提交归档任务、读取已完成归档产物，并按需发起二维码登录。"
+            "正文读取支持知乎回答和专栏文章；问题读取返回问题描述、话题和统计；"
+            "热榜最多返回三十个问题；个人列表支持回答、文章、想法、收藏夹及收藏夹"
+            "内容。归档产物通过任务 ID 和受限类型读取，不使用服务器文件系统路径。"
         ),
         streamable_http_path="/",
         stateless_http=True,

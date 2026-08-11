@@ -8,7 +8,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 import archive.api.app as app_module
 from archive.api import security
-from archive.core.archiver import TextArchive
+from archive.core.archiver import ArchiveQueueService, TextArchive
 from archive.core.base import TargetType
 from archive.core.hot import HotQuestion, HotQuestionList
 from archive.core.profile import ProfileContentType, ProfilePage
@@ -17,12 +17,17 @@ from archive.mcp_server import (
     MCPBearerAuthMiddleware,
     create_mcp_server,
     enqueue_zhihu_archive,
+    get_zhihu_archive_screenshot,
+    get_zhihu_archive_task,
+    get_zhihu_archiver_status,
     get_zhihu_login_qrcode,
     list_zhihu_collection_items,
     list_zhihu_hot_questions,
     list_zhihu_profile_items,
+    read_zhihu_archive_artifact,
     read_zhihu_content,
     read_zhihu_question,
+    resume_zhihu_archiver,
 )
 from archive.services import AppServices
 from archive.storage import SQLiteStore
@@ -41,8 +46,12 @@ async def test_mcp_exposes_expected_zhihu_tools() -> None:
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",
+        "get_zhihu_archiver_status",
+        "resume_zhihu_archiver",
         "enqueue_zhihu_archive",
         "get_zhihu_archive_task",
+        "read_zhihu_archive_artifact",
+        "get_zhihu_archive_screenshot",
         "start_zhihu_login",
         "get_zhihu_login_status",
         "get_zhihu_login_qrcode",
@@ -345,6 +354,14 @@ async def test_mcp_archive_enqueue_does_not_use_live_archiver(monkeypatch) -> No
     }
     task = MagicMock(task_name="activity-id")
     services.archive_queue.enqueue_url = AsyncMock(return_value=(task, item))
+    services.get_archiver_status = AsyncMock(
+        return_value={
+            "paused": True,
+            "status": "waiting",
+            "worker_alive": True,
+            "last_error": None,
+        }
+    )
     monkeypatch.setattr(
         "archive.mcp_server.get_current_services",
         lambda: services,
@@ -353,7 +370,198 @@ async def test_mcp_archive_enqueue_does_not_use_live_archiver(monkeypatch) -> No
     result = await enqueue_zhihu_archive(item["target"]["link"])
 
     assert result.task_id == "activity-id"
+    assert result.archiver.paused is True
     services.archive_queue.enqueue_url.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_reads_and_resumes_archiver_status(monkeypatch) -> None:
+    """验证 MCP 可读取并恢复 Archiver 后台任务。"""
+    services = MagicMock()
+    services.get_archiver_status = AsyncMock(
+        return_value={
+            "paused": True,
+            "status": "waiting",
+            "worker_alive": True,
+            "last_error": None,
+        }
+    )
+    services.resume_archiver = AsyncMock(
+        return_value={
+            "paused": False,
+            "status": "waiting",
+            "worker_alive": True,
+            "last_error": None,
+        }
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    current = await get_zhihu_archiver_status()
+    resumed = await resume_zhihu_archiver()
+
+    assert current.paused is True
+    assert resumed.paused is False
+    assert resumed.worker_alive is True
+    services.resume_archiver.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_mcp_completed_archive_task_returns_artifacts(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证完成任务会返回归档目录和各产物文件路径。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.set_settings("global", {"people": "someone"})
+    queue = ArchiveQueueService(store)
+    task, _item = await queue.enqueue_url("https://www.zhihu.com/question/1/answer/2")
+    archive_path = "someone/archives/answer"
+    files = {
+        "screenshot": "answer.jpeg",
+        "info": "info.json",
+        "markdown": "answer.md",
+    }
+    await store.mark_archive_task_done(
+        task.task_name,
+        {"archive_path": archive_path, "files": files},
+    )
+    services = MagicMock(store=store)
+    services.get_archiver_status = AsyncMock(
+        return_value={
+            "paused": False,
+            "status": "waiting",
+            "worker_alive": True,
+            "last_error": None,
+        }
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await get_zhihu_archive_task(task.task_name)
+
+    assert result.status == "done"
+    assert result.archive_path == archive_path
+    assert result.files == files
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_reads_archive_text_and_screenshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证 MCP 通过任务索引分页读取文本并返回截图图片。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.set_settings("global", {"people": "someone"})
+    queue = ArchiveQueueService(store)
+    task, _item = await queue.enqueue_url("https://www.zhihu.com/question/1/answer/2")
+    archive_path = "someone/archives/2026/08/11/example"
+    archive_dir = tmp_path.joinpath(*archive_path.split("/"))
+    archive_dir.mkdir(parents=True)
+    archive_dir.joinpath("info.json").write_text(
+        '{"title":"测试回答"}',
+        encoding="utf-8",
+    )
+    archive_dir.joinpath("answer.md").write_text(
+        "0123456789",
+        encoding="utf-8",
+    )
+    archive_dir.joinpath("answer.html").write_text(
+        "<p>测试回答</p>",
+        encoding="utf-8",
+    )
+    archive_dir.joinpath("answer.jpeg").write_bytes(b"jpeg-data")
+    await store.mark_archive_task_done(
+        task.task_name,
+        {
+            "archive_path": archive_path,
+            "files": {
+                "info": "info.json",
+                "markdown": "answer.md",
+                "html": "answer.html",
+                "screenshot": "answer.jpeg",
+            },
+        },
+    )
+    services = MagicMock(store=store)
+    services.mcp_config.get_config = AsyncMock(return_value={"max_content_chars": 4})
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.settings.results_dir",
+        tmp_path,
+    )
+
+    text_result = await read_zhihu_archive_artifact(
+        task.task_name,
+        "markdown",
+        offset=2,
+    )
+    screenshot = await get_zhihu_archive_screenshot(task.task_name)
+
+    assert text_result.filename == "answer.md"
+    assert text_result.content_format == "markdown"
+    assert text_result.content == "2345"
+    assert text_result.total_chars == 10
+    assert text_result.next_offset == 6
+    assert screenshot.data == b"jpeg-data"
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_archive_artifact_rejects_unsafe_or_missing_files(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证 MCP 不读取未完成任务、越界索引或已丢失产物。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    await store.set_settings("global", {"people": "someone"})
+    queue = ArchiveQueueService(store)
+    task, _item = await queue.enqueue_url("https://www.zhihu.com/question/1/answer/2")
+    services = MagicMock(store=store)
+    services.mcp_config.get_config = AsyncMock(return_value={"max_content_chars": 100})
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+    monkeypatch.setattr(
+        "archive.mcp_server.settings.results_dir",
+        tmp_path,
+    )
+
+    with pytest.raises(ToolError, match="尚未完成"):
+        await read_zhihu_archive_artifact(task.task_name, "markdown")
+
+    await store.mark_archive_task_done(
+        task.task_name,
+        {
+            "archive_path": "someone/archives/example",
+            "files": {"markdown": "../secret.md"},
+        },
+    )
+    with pytest.raises(ToolError, match="索引不合法"):
+        await read_zhihu_archive_artifact(task.task_name, "markdown")
+
+    await store.mark_archive_task_done(
+        task.task_name,
+        {
+            "archive_path": "someone/archives/example",
+            "files": {"markdown": "missing.md"},
+        },
+    )
+    with pytest.raises(ToolError, match="已丢失"):
+        await read_zhihu_archive_artifact(task.task_name, "markdown")
+    await store.close()
 
 
 def test_mcp_initialize_uses_token_rotated_by_main_service(
@@ -421,8 +629,12 @@ def test_mcp_initialize_uses_token_rotated_by_main_service(
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",
+        "get_zhihu_archiver_status",
+        "resume_zhihu_archiver",
         "enqueue_zhihu_archive",
         "get_zhihu_archive_task",
+        "read_zhihu_archive_artifact",
+        "get_zhihu_archive_screenshot",
         "start_zhihu_login",
         "get_zhihu_login_status",
         "get_zhihu_login_qrcode",
@@ -453,6 +665,30 @@ def test_reader_failure_does_not_mark_main_service_unhealthy(tmp_path) -> None:
     services.worker_errors["reader"] = "driver exited"
 
     assert services.healthy() is True
+
+
+@pytest.mark.asyncio
+async def test_resume_archiver_restarts_finished_worker(tmp_path) -> None:
+    """验证恢复 Archiver 时会重启已经结束的后台任务。"""
+    services = AppServices(SQLiteStore(tmp_path / "zhi.sqlite3"))
+    await services.store.connect()
+    await services.store.seed_defaults()
+
+    async def finish_worker() -> None:
+        """模拟一个已经异常结束的 Archiver 顶层任务。"""
+
+    finished_task = asyncio.create_task(finish_worker())
+    await finished_task
+    services.archiver_task = finished_task
+    services.worker_errors["archiver"] = "worker exited"
+
+    status = await services.resume_archiver()
+
+    assert status["paused"] is False
+    assert status["worker_alive"] is True
+    assert services.archiver_task is not finished_task
+    assert "archiver" not in services.worker_errors
+    await services.stop()
 
 
 @pytest.mark.asyncio
