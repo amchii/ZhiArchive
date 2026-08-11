@@ -20,6 +20,10 @@ from archive.core.archiver import (
     parse_archive_url,
 )
 from archive.core.base import Target
+from archive.core.hot import (
+    HotQuestionList,
+    read_hot_questions,
+)
 from archive.core.profile import (
     ProfileContentType,
     ProfilePage,
@@ -85,6 +89,16 @@ class ProfileReaderJob:
 
 
 @dataclass
+class HotReaderJob:
+    """表示等待 ReaderWorker 执行的一次热榜读取请求。"""
+
+    limit: int
+    future: asyncio.Future[HotQuestionList]
+    deadline: float
+    cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
+
+
+@dataclass
 class QuestionReaderJob:
     """表示等待 ReaderWorker 执行的一次问题读取请求。"""
 
@@ -94,8 +108,8 @@ class QuestionReaderJob:
     cancel_event: asyncio.Event = field(default_factory=asyncio.Event)
 
 
-ReaderQueueJob = ReaderJob | ProfileReaderJob | QuestionReaderJob
-ReaderResult = TextArchive | ProfilePage | QuestionResult
+ReaderQueueJob = ReaderJob | ProfileReaderJob | HotReaderJob | QuestionReaderJob
+ReaderResult = TextArchive | ProfilePage | HotQuestionList | QuestionResult
 ProfileCacheKey = tuple[
     ProfileContentType,
     str | None,
@@ -112,6 +126,14 @@ class ProfileCacheEntry:
 
     expires_at: float
     page: ProfilePage
+
+
+@dataclass
+class HotListCacheEntry:
+    """表示一份知乎热榜的短期内存缓存。"""
+
+    expires_at: float
+    hot_list: HotQuestionList
 
 
 @dataclass
@@ -205,6 +227,7 @@ class ReaderWorker(ZhihuContentWorker):
         self._profile_cooldown_until = 0.0
         self._profile_rate_limit_failures = 0
         self._profile_cache: dict[ProfileCacheKey, ProfileCacheEntry] = {}
+        self._hot_list_cache: dict[tuple[int, str | None], HotListCacheEntry] = {}
         self._question_cache: dict[tuple[str, str | None], QuestionCacheEntry] = {}
 
     @property
@@ -326,6 +349,37 @@ class ReaderWorker(ZhihuContentWorker):
             future.cancel()
             raise
 
+    async def submit_hot_questions(self, limit: int, timeout: int) -> HotQuestionList:
+        """提交一次知乎热榜读取并等待结果。
+
+        Args:
+            limit: 返回的热榜问题数量，最大为三十。
+            timeout: 等待 Reader 返回结果的最大秒数。
+        """
+        if not self._ready.is_set():
+            raise ReaderUnavailableError("ReaderWorker 尚未就绪")
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[HotQuestionList] = loop.create_future()
+        job = HotReaderJob(
+            limit=limit,
+            future=future,
+            deadline=loop.time() + timeout,
+        )
+        try:
+            self.queue.put_nowait(job)
+        except asyncio.QueueFull as error:
+            future.cancel()
+            raise ReaderBusyError("Reader 请求队列已满") from error
+        try:
+            return await asyncio.wait_for(future, timeout=timeout)
+        except asyncio.TimeoutError as error:
+            job.cancel_event.set()
+            raise ReaderError("读取知乎热榜超时") from error
+        except asyncio.CancelledError:
+            job.cancel_event.set()
+            future.cancel()
+            raise
+
     async def run_reader(self, headless: bool = True) -> None:
         """持续消费即时读取请求，并维护 Reader 独立 Browser。
 
@@ -381,7 +435,10 @@ class ReaderWorker(ZhihuContentWorker):
         remaining = job.deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             raise ReaderError("读取知乎内容超时")
-        if isinstance(job, QuestionReaderJob):
+        if isinstance(job, HotReaderJob):
+            read_coro = self._read_hot_questions(job.limit, headless=headless)
+            task_name = "zhi-hot-reader-request"
+        elif isinstance(job, QuestionReaderJob):
             read_coro = self._read_question(job.url, headless=headless)
             task_name = "zhi-question-reader-request"
         elif isinstance(job, ProfileReaderJob):
@@ -518,6 +575,47 @@ class ReaderWorker(ZhihuContentWorker):
         self._profile_cache[key] = ProfileCacheEntry(
             expires_at=now + self.profile_cache_ttl_seconds,
             page=page.model_copy(deep=True),
+        )
+
+    def _get_cached_hot_list(
+        self,
+        key: tuple[int, str | None],
+        now: float,
+    ) -> HotQuestionList | None:
+        """返回尚未过期的热榜缓存并清理旧条目。
+
+        Args:
+            key: 返回条目数与登录态修订时间组成的缓存键。
+            now: 当前事件循环单调时间。
+        """
+        expired_keys = [
+            cache_key
+            for cache_key, entry in self._hot_list_cache.items()
+            if entry.expires_at <= now
+        ]
+        for cache_key in expired_keys:
+            self._hot_list_cache.pop(cache_key, None)
+        entry = self._hot_list_cache.get(key)
+        return entry.hot_list.model_copy(deep=True) if entry is not None else None
+
+    def _cache_hot_list(
+        self,
+        key: tuple[int, str | None],
+        hot_list: HotQuestionList,
+        now: float,
+    ) -> None:
+        """把知乎热榜保存到短期内存缓存。
+
+        Args:
+            key: 返回条目数与登录态修订时间组成的缓存键。
+            hot_list: 已成功解析的热榜快照。
+            now: 当前事件循环单调时间。
+        """
+        if self.profile_cache_ttl_seconds <= 0:
+            return
+        self._hot_list_cache[key] = HotListCacheEntry(
+            expires_at=now + self.profile_cache_ttl_seconds,
+            hot_list=hot_list.model_copy(deep=True),
         )
 
     def _get_cached_question(
@@ -688,6 +786,51 @@ class ReaderWorker(ZhihuContentWorker):
             )
             self._cache_question(cache_key, question, loop.time())
             return question
+        finally:
+            await context.close()
+
+    async def _read_hot_questions(
+        self,
+        limit: int,
+        headless: bool,
+    ) -> HotQuestionList:
+        """使用独立 BrowserContext 读取知乎热榜问题。
+
+        Args:
+            limit: 返回的热榜问题数量，最大为三十。
+            headless: 是否使用无头浏览器。
+        """
+        status = await self.auth_state.status()
+        if not status["configured"] or not status["valid"]:
+            raise ReaderAuthStateError(status["error"] or "知乎登录状态不可用")
+
+        auth_updated_at = status.get("updated_at")
+        auth_revision = (
+            auth_updated_at.isoformat() if auth_updated_at is not None else None
+        )
+        cache_key = (limit, auth_revision)
+        loop = asyncio.get_running_loop()
+        cached_hot_list = self._get_cached_hot_list(cache_key, loop.time())
+        if cached_hot_list is not None:
+            return cached_hot_list
+
+        await self._wait_for_profile_request_slot()
+        browser = await self._ensure_browser(headless)
+        context = await self._new_reader_context(browser)
+        try:
+            self._profile_last_request_at = loop.time()
+            try:
+                hot_list = await read_hot_questions(
+                    context.request,
+                    limit=limit,
+                    timeout=self.page_default_timeout,
+                )
+            except ProfileRateLimitError as error:
+                self._open_profile_circuit(error)
+                raise
+            self._close_profile_circuit()
+            self._cache_hot_list(cache_key, hot_list, loop.time())
+            return hot_list
         finally:
             await context.close()
 

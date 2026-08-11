@@ -15,6 +15,11 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from archive.config import settings
 from archive.core.base import TargetType
+from archive.core.hot import (
+    HOT_LIST_MAX_ITEMS,
+    HotQuestionList,
+    validate_hot_limit,
+)
 from archive.core.profile import (
     ProfileContentType,
     ProfilePage,
@@ -31,6 +36,7 @@ if TYPE_CHECKING:
 
 MAX_QRCODE_BYTES = 1024 * 1024
 ProfilePageLimit = Annotated[int, Field(ge=1, le=20)]
+HotListLimit = Annotated[int, Field(ge=1, le=HOT_LIST_MAX_ITEMS)]
 MCPToolFunction = Callable[..., Any]
 MCPToolRegistration = tuple[
     MCPToolFunction,
@@ -218,6 +224,35 @@ async def read_zhihu_question(url: str) -> QuestionResult:
         await services.ensure_reader_started()
         return await services.reader.submit_question(
             normalized_url,
+            timeout=config["reader_timeout_seconds"],
+        )
+    except (RuntimeError, ValueError) as error:
+        raise ToolError(str(error)) from error
+
+
+@register_mcp_tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+)
+async def list_zhihu_hot_questions(
+    limit: HotListLimit = HOT_LIST_MAX_ITEMS,
+) -> HotQuestionList:
+    """读取当前知乎热榜中的问题，最多返回三十条。
+
+    Args:
+        limit: 返回的热榜问题数量，范围 1 到 30。
+    """
+    services = require_services()
+    try:
+        normalized_limit = validate_hot_limit(limit)
+        config = await services.mcp_config.get_config()
+        await services.ensure_reader_started()
+        return await services.reader.submit_hot_questions(
+            normalized_limit,
             timeout=config["reader_timeout_seconds"],
         )
     except (RuntimeError, ValueError) as error:
@@ -516,10 +551,10 @@ def create_mcp_server() -> FastMCP:
     server = FastMCP(
         "ZhiArchive",
         instructions=(
-            "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文、问题和个人内容列表、"
-            "提交归档任务，并按需发起二维码登录。正文读取支持知乎回答和专栏文章；"
-            "问题读取返回问题描述、话题和统计；个人列表支持回答、文章、想法、"
-            "收藏夹及收藏夹内容。"
+            "使用已由 ZhiArchive 主服务托管的知乎登录态读取正文、问题、热榜和个人"
+            "内容列表、提交归档任务，并按需发起二维码登录。正文读取支持知乎回答和"
+            "专栏文章；问题读取返回问题描述、话题和统计；热榜最多返回三十个问题；"
+            "个人列表支持回答、文章、想法、收藏夹及收藏夹内容。"
         ),
         streamable_http_path="/",
         stateless_http=True,

@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,6 +10,7 @@ import archive.api.app as app_module
 from archive.api import security
 from archive.core.archiver import TextArchive
 from archive.core.base import TargetType
+from archive.core.hot import HotQuestion, HotQuestionList
 from archive.core.profile import ProfileContentType, ProfilePage
 from archive.core.question import QuestionResult
 from archive.mcp_server import (
@@ -17,6 +19,7 @@ from archive.mcp_server import (
     enqueue_zhihu_archive,
     get_zhihu_login_qrcode,
     list_zhihu_collection_items,
+    list_zhihu_hot_questions,
     list_zhihu_profile_items,
     read_zhihu_content,
     read_zhihu_question,
@@ -34,6 +37,7 @@ async def test_mcp_exposes_expected_zhihu_tools() -> None:
     assert tools == {
         "read_zhihu_content",
         "read_zhihu_question",
+        "list_zhihu_hot_questions",
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",
@@ -134,6 +138,50 @@ async def test_read_question_validates_url_and_uses_reader(monkeypatch) -> None:
     with pytest.raises(ToolError, match="不包含回答 ID"):
         await read_zhihu_question("https://www.zhihu.com/question/123/answer/456")
     assert services.reader.submit_question.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_list_hot_questions_validates_limit_and_uses_reader(monkeypatch) -> None:
+    """验证热榜工具限制为三十条并复用 Reader 超时配置。"""
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={"reader_timeout_seconds": 30}
+    )
+    services.ensure_reader_started = AsyncMock()
+    expected = HotQuestionList(
+        items=[
+            HotQuestion(
+                rank=1,
+                id="123",
+                title="测试热榜问题",
+                excerpt="问题摘要",
+                url="https://www.zhihu.com/question/123",
+                heat="100 万热度",
+                answer_count=10,
+                image_url=None,
+                label=None,
+                trend=0,
+            )
+        ],
+        total=1,
+        limit=10,
+        fetched_at=datetime.now(timezone.utc),
+    )
+    services.reader.submit_hot_questions = AsyncMock(return_value=expected)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    result = await list_zhihu_hot_questions(limit=10)
+
+    assert result is expected
+    services.reader.submit_hot_questions.assert_awaited_once_with(10, timeout=30)
+    services.ensure_reader_started.assert_awaited_once_with()
+
+    with pytest.raises(ToolError, match="1 到 30"):
+        await list_zhihu_hot_questions(limit=31)  # type: ignore[arg-type]
+    assert services.reader.submit_hot_questions.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -369,6 +417,7 @@ def test_mcp_initialize_uses_token_rotated_by_main_service(
     assert {tool["name"] for tool in tools_response.json()["result"]["tools"]} == {
         "read_zhihu_content",
         "read_zhihu_question",
+        "list_zhihu_hot_questions",
         "list_zhihu_profile_items",
         "list_zhihu_collection_items",
         "get_zhihu_auth_status",

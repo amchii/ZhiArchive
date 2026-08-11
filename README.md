@@ -264,6 +264,7 @@ Token 明文只在生成或轮换时显示一次，主服务仅在 SQLite 中保
 
 - `read_zhihu_content`：即时读取知乎回答或专栏文章，支持 Markdown、HTML 和分页。
 - `read_zhihu_question`：读取问题本身的描述、话题、作者、统计和时间信息。
+- `list_zhihu_hot_questions`：读取当前知乎热榜问题，最多返回 30 条，不提供分页。
 - `list_zhihu_profile_items`：分页查看用户发布的回答、文章、想法或收藏夹；
   省略用户 ID 时使用当前全局目标用户。
 - `list_zhihu_collection_items`：使用收藏夹 ID 分页查看其中的内容。
@@ -278,11 +279,11 @@ Browser 和有界队列，每次读取创建独立 BrowserContext，且不会把
 Archiver 继续使用原有后台队列和浏览器并发控制。Reader 在首次读取时按需启动，MCP
 未使用时不会影响主服务健康状态。
 
-问题由登录 BrowserContext 正常打开问题页并解析 `#js-initialData` 中的结构化数据，
-个人列表则直接请求知乎 JSON API，并按回答、文章、想法和收藏夹动态设置对应页面
-Referer。默认在相邻请求间等待 2～3 秒，相同问题或分页
-缓存 30 秒；个人列表 API 收到 403 或 429 后停止继续请求，并按 `Retry-After` 和
-指数退避进入最长 15 分钟的本地冷却。
+问题由登录 BrowserContext 正常打开问题页并解析 `#js-initialData` 中的结构化数据；
+热榜和个人列表则直接请求知乎页面实际使用的 JSON API，并分别设置热榜页及回答、
+文章、想法和收藏夹页面 Referer。默认在相邻请求间等待 2～3 秒，相同问题、热榜或
+分页缓存 30 秒；列表 API 收到 403 或 429 后停止继续请求，并按 `Retry-After` 和指数
+退避进入最长 15 分钟的本地冷却。
 可通过同名大写环境变量调整 `profile_request_min_interval_seconds`、
 `profile_request_jitter_seconds`、`profile_cache_ttl_seconds`、
 `profile_cooldown_base_seconds` 和 `profile_cooldown_max_seconds`。
