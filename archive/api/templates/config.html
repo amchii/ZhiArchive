@@ -570,6 +570,14 @@
                 <p class="field-help">Streamable HTTP 地址为当前站点的 /mcp/。</p>
             </div>
             <div class="field">
+                <label for="mcpAllowAnonymousLocal">本机匿名访问</label>
+                <select id="mcpAllowAnonymousLocal">
+                    <option value="true">允许直接本机请求（默认）</option>
+                    <option value="false">关闭</option>
+                </select>
+                <p class="field-help">仅按回环地址和请求头识别本机。同机反向代理若不保留来源信息，可能被识别为本机；代理部署请关闭此项。</p>
+            </div>
+            <div class="field">
                 <label for="mcpReaderTimeout">Reader 超时（秒）</label>
                 <input type="number" id="mcpReaderTimeout" min="5" max="300" required>
             </div>
@@ -865,6 +873,8 @@
   function renderMCPConfig(data) {
     const badge = document.getElementById('mcpConfigBadge');
     document.getElementById('mcpEnabled').value = String(Boolean(data.enabled));
+    document.getElementById('mcpAllowAnonymousLocal').value =
+      String(Boolean(data.allow_anonymous_local));
     document.getElementById('mcpReaderTimeout').value = data.reader_timeout_seconds;
     document.getElementById('mcpMaxContentChars').value = data.max_content_chars;
     document.getElementById('mcpTokenStatus').textContent = data.token_configured
@@ -891,6 +901,8 @@
   async function saveMCPConfig() {
     const payload = {
       enabled: document.getElementById('mcpEnabled').value === 'true',
+      allow_anonymous_local:
+        document.getElementById('mcpAllowAnonymousLocal').value === 'true',
       reader_timeout_seconds: Number(document.getElementById('mcpReaderTimeout').value),
       max_content_chars: Number(document.getElementById('mcpMaxContentChars').value)
     };

@@ -1,9 +1,11 @@
+import ipaddress
 import json
 import pathlib
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Literal
+from urllib.parse import urlsplit
 
 import aiofiles
 from mcp.server.fastmcp import FastMCP, Image
@@ -43,6 +45,15 @@ if TYPE_CHECKING:
 
 MAX_QRCODE_BYTES = 1024 * 1024
 MAX_ARCHIVE_IMAGE_BYTES = 20 * 1024 * 1024
+PROXY_IDENTITY_HEADERS = frozenset(
+    {
+        b"forwarded",
+        b"x-forwarded-for",
+        b"x-forwarded-host",
+        b"x-forwarded-proto",
+        b"x-real-ip",
+    }
+)
 ProfilePageLimit = Annotated[int, Field(ge=1, le=20)]
 HotListLimit = Annotated[int, Field(ge=1, le=HOT_LIST_MAX_ITEMS)]
 ArchiveTextArtifact = Literal["info", "markdown", "html"]
@@ -729,8 +740,95 @@ async def get_zhihu_login_qrcode(login_id: str) -> Image:
     return Image(data=data, format="png")
 
 
+def is_loopback_ip(value: str) -> bool:
+    """判断字符串是否为 IPv4、IPv6 或映射形式的回环地址。
+
+    Args:
+        value: 待检查的 IP 地址字符串。
+    """
+    try:
+        address = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    if address.is_loopback:
+        return True
+    mapped = getattr(address, "ipv4_mapped", None)
+    return mapped is not None and mapped.is_loopback
+
+
+def is_loopback_authority(value: str) -> bool:
+    """判断 HTTP Host 或 Origin authority 是否指向本机回环地址。
+
+    Args:
+        value: Host header 或带端口的 authority。
+    """
+    try:
+        parsed = urlsplit(f"//{value}")
+        hostname = parsed.hostname or ""
+        _port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    return hostname.lower() == "localhost" or is_loopback_ip(hostname)
+
+
+def is_loopback_origin(value: str) -> bool:
+    """判断 Origin 是否为格式严格的本机 HTTP(S) Origin。
+
+    Args:
+        value: Origin 请求头内容。
+    """
+    try:
+        parsed = urlsplit(value)
+        _port = parsed.port
+    except ValueError:
+        return False
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    hostname = parsed.hostname or ""
+    return hostname.lower() == "localhost" or is_loopback_ip(hostname)
+
+
+def is_direct_loopback_request(scope: Scope) -> bool:
+    """判断请求是否直接来自本机且未经过声明身份的代理。
+
+    同机代理若不保留来源头且把 Host 改为回环地址，在 ASGI 层与直接本机请求无法区分。
+
+    Args:
+        scope: 当前 HTTP ASGI scope。
+    """
+    client = scope.get("client")
+    if not client or not is_loopback_ip(str(client[0])):
+        return False
+    headers = {
+        bytes(name).lower(): bytes(value).decode("latin-1")
+        for name, value in scope.get("headers", [])
+    }
+    if PROXY_IDENTITY_HEADERS.intersection(headers):
+        return False
+    host = headers.get(b"host")
+    if not host or not is_loopback_authority(host):
+        return False
+    origin = headers.get(b"origin")
+    return origin is None or is_loopback_origin(origin)
+
+
 class MCPBearerAuthMiddleware:
-    """使用主服务管理的独立 Bearer Token 保护 MCP 子应用。"""
+    """使用 Bearer Token 或可选的直接本机匿名规则保护 MCP。"""
 
     def __init__(self, app: ASGIApp) -> None:
         """包装 MCP ASGI 子应用。
@@ -753,8 +851,8 @@ class MCPBearerAuthMiddleware:
         if not config["enabled"]:
             await send_http_error(send, 503, "MCP 服务未启用")
             return
-        if not config["token_configured"]:
-            await send_http_error(send, 503, "MCP Token 尚未配置")
+        if config["allow_anonymous_local"] and is_direct_loopback_request(scope):
+            await self.app(scope, receive, send)
             return
 
         authorization = ""

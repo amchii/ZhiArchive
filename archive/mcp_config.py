@@ -13,6 +13,7 @@ class MCPRuntimeConfig(TypedDict):
     """表示可由主服务动态管理的 MCP 配置。"""
 
     enabled: bool
+    allow_anonymous_local: bool
     token_configured: bool
     reader_timeout_seconds: int
     max_content_chars: int
@@ -42,7 +43,8 @@ class MCPConfigManager:
         """读取不包含 Token 摘要的 MCP 运行配置。"""
         stored = await self.store.get_settings(MCP_SETTINGS_PREFIX)
         return MCPRuntimeConfig(
-            enabled=bool(stored.get("enabled", False)),
+            enabled=bool(stored.get("enabled", True)),
+            allow_anonymous_local=bool(stored.get("allow_anonymous_local", True)),
             token_configured=bool(stored.get("token_hash")),
             reader_timeout_seconds=int(
                 stored.get(
@@ -59,6 +61,7 @@ class MCPConfigManager:
         self,
         *,
         enabled: bool,
+        allow_anonymous_local: bool | None,
         reader_timeout_seconds: int,
         max_content_chars: int,
     ) -> MCPRuntimeConfig:
@@ -66,17 +69,18 @@ class MCPConfigManager:
 
         Args:
             enabled: 是否允许 MCP 请求进入工具层。
+            allow_anonymous_local: 是否允许直接本机匿名请求；为空时保留现有值。
             reader_timeout_seconds: 单次即时读取的最大等待秒数。
             max_content_chars: MCP 单次返回正文的最大字符数。
         """
-        await self.store.set_settings(
-            MCP_SETTINGS_PREFIX,
-            {
-                "enabled": enabled,
-                "reader_timeout_seconds": reader_timeout_seconds,
-                "max_content_chars": max_content_chars,
-            },
-        )
+        values = {
+            "enabled": enabled,
+            "reader_timeout_seconds": reader_timeout_seconds,
+            "max_content_chars": max_content_chars,
+        }
+        if allow_anonymous_local is not None:
+            values["allow_anonymous_local"] = allow_anonymous_local
+        await self.store.set_settings(MCP_SETTINGS_PREFIX, values)
         return await self.get_config()
 
     async def rotate_token(self) -> tuple[str, MCPRuntimeConfig]:

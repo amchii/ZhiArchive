@@ -13,7 +13,8 @@ ZhiArchive 基于 Playwright、FastAPI 和 SQLite 工作，适合以单机单实
 - 对动态中的回答和文章触发归档，保存长截图、元信息、HTML 和 Markdown。
 - 对赞同或发布的想法保存动态截图。
 - 支持在控制台手动提交回答或文章链接，主动触发归档。
-- 提供带独立 Bearer Token 的 MCP 接口，供 AI Agent 读取内容、提交归档和发起登录。
+- 提供支持独立 Bearer Token 和可选本机匿名访问的 MCP 接口，供 AI Agent 读取内容、
+  提交归档和发起登录。
 - 提供 Web 控制台管理登录状态、Cookie 路径、目标用户、运行状态和后台任务配置。
 - 提供只读结果浏览器，在线查看动态截图、JSON、HTML 和 Markdown 归档。
 - 支持 Docker 部署，也支持本地 `uv` 环境运行。
@@ -122,9 +123,13 @@ export UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple/
 
 ```sh
 bash run_api.sh
+# 可选：指定监听地址和端口
+bash run_api.sh 127.0.0.1 9090
 ```
 
-`run_api.sh` 固定使用一个 Uvicorn worker。monitor、archiver 和二维码登录任务会在同一个 API 进程中启动，不再单独运行 worker。
+`run_api.sh` 的 host 和 port 参数默认分别为 `0.0.0.0` 和 `9090`，并固定使用一个
+Uvicorn worker。monitor、archiver 和二维码登录任务会在同一个 API 进程中启动，
+不再单独运行 worker。
 
 代码检查和测试：
 
@@ -255,10 +260,13 @@ MCP Server 与主服务运行在同一进程，通过 Streamable HTTP 暴露：
 http://127.0.0.1:9090/mcp/
 ```
 
-MCP 使用独立 Bearer Token，不复用控制台 Cookie。请在配置控制台的
-“AI Agent 接入”区域生成 Token、保存 Reader 超时和正文长度限制，然后开启 MCP。
-Token 明文只在生成或轮换时显示一次，主服务仅在 SQLite 中保存摘要；生成新 Token
-会立即使旧 Token 失效。
+MCP 和直接本机匿名访问默认开启，远程请求使用独立 Bearer Token，不复用控制台
+Cookie。未配置 Token 不影响 MCP 启动，但非本机请求无法通过 Bearer 鉴权。本机匿名
+访问只接受回环客户端、回环 Host/Origin 且不带代理身份头的请求，不把 Docker 或局域
+网地址视为本机，也可在配置控制台关闭。同机反向代理若不保留来源头并把后端 Host
+改为回环地址，在应用层可能被识别为本机；使用反向代理时应关闭匿名访问。Token 明文
+只在生成或轮换时显示一次，主服务仅在 SQLite 中保存摘要；生成新 Token 会立即使旧
+Token 失效。
 
 当前提供以下工具：
 
@@ -350,7 +358,12 @@ cors_allowed_origins=https://console.example.com
 
 ### MCP Token
 
-MCP 使用独立 Bearer Token 鉴权，不复用控制台 Cookie。Token 明文只在生成或轮换时显示一次，请妥善保存；生成新 Token 会使旧 Token 立即失效。将 MCP 端点暴露到公网时，同样建议通过反向代理配置 HTTPS。
+远程 MCP 请求使用独立 Bearer Token 鉴权，不复用控制台 Cookie。Token 明文只在生成
+或轮换时显示一次，请妥善保存；生成新 Token 会使旧 Token 立即失效。默认开启的本机
+匿名访问会让本机所有进程都能调用 MCP，仅适合受信任的本机环境，不需要时应在控制台
+关闭。同机反向代理可能让外部请求在应用层表现为回环请求，因此反向代理和公网部署应
+关闭匿名访问并继续使用 Token；Docker 部署也应继续使用 Token。将 MCP 端点暴露到
+公网时，同样建议通过反向代理配置 HTTPS。
 
 ## 手动归档
 

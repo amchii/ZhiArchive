@@ -122,27 +122,58 @@ async def test_enqueue_archive_task_reports_invalid_url(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_main_service_requires_token_before_enabling_mcp(
+async def test_main_service_allows_mcp_without_token(
     monkeypatch,
     tmp_path,
 ) -> None:
-    """验证主服务在生成独立 Token 前不会启用 MCP。"""
+    """验证未配置 Token 不会限制 MCP 开关或本机匿名配置。"""
     store = SQLiteStore(tmp_path / "zhi.sqlite3")
     await store.connect()
     manager = MCPConfigManager(store)
     monkeypatch.setattr(core, "get_mcp_config_manager", lambda: manager)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await core.set_mcp_config(
-            core.MCPConfigUpdate(
-                enabled=True,
-                reader_timeout_seconds=60,
-                max_content_chars=50_000,
-            )
+    config = await core.set_mcp_config(
+        core.MCPConfigUpdate(
+            enabled=True,
+            allow_anonymous_local=True,
+            reader_timeout_seconds=60,
+            max_content_chars=50_000,
         )
+    )
 
-    assert exc_info.value.status_code == 409
-    assert (await manager.get_config())["enabled"] is False
+    assert config["enabled"] is True
+    assert config["allow_anonymous_local"] is True
+    assert config["token_configured"] is False
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_config_update_preserves_anonymous_setting_when_omitted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """验证旧客户端省略新字段时不会重新开启已关闭的本机匿名访问。"""
+    store = SQLiteStore(tmp_path / "zhi.sqlite3")
+    await store.connect()
+    manager = MCPConfigManager(store)
+    await manager.update_config(
+        enabled=True,
+        allow_anonymous_local=False,
+        reader_timeout_seconds=60,
+        max_content_chars=50_000,
+    )
+    monkeypatch.setattr(core, "get_mcp_config_manager", lambda: manager)
+
+    payload = core.MCPConfigUpdate(
+        enabled=True,
+        reader_timeout_seconds=90,
+        max_content_chars=60_000,
+    )
+    config = await core.set_mcp_config(payload)
+
+    assert payload.allow_anonymous_local is None
+    assert config["allow_anonymous_local"] is False
+    assert config["reader_timeout_seconds"] == 90
     await store.close()
 
 

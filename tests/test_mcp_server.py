@@ -281,19 +281,34 @@ async def test_list_collection_items_validates_id_and_uses_reader(monkeypatch) -
 async def call_middleware(
     middleware: MCPBearerAuthMiddleware,
     authorization: bytes | None,
+    *,
+    client: tuple[str, int] = ("203.0.113.10", 50000),
+    host: bytes = b"example.test:9090",
+    origin: bytes | None = None,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> tuple[list[dict[str, object]], AsyncMock]:
     """调用一次 MCP 鉴权中间件并返回 ASGI 消息。
 
     Args:
         middleware: 待测试的认证中间件。
         authorization: Authorization 请求头内容。
+        client: ASGI scope 中的客户端地址。
+        host: Host 请求头。
+        origin: 可选的 Origin 请求头。
+        extra_headers: 需要附加的其他请求头。
     """
-    headers = [] if authorization is None else [(b"authorization", authorization)]
+    headers = [(b"host", host)]
+    if authorization is not None:
+        headers.append((b"authorization", authorization))
+    if origin is not None:
+        headers.append((b"origin", origin))
+    headers.extend(extra_headers or [])
     scope = {
         "type": "http",
         "method": "POST",
         "path": "/",
         "headers": headers,
+        "client": client,
     }
     sent: list[dict[str, object]] = []
     receive = AsyncMock()
@@ -313,7 +328,11 @@ async def test_mcp_middleware_uses_main_service_token(monkeypatch) -> None:
     middleware = MCPBearerAuthMiddleware(inner)
     services = MagicMock()
     services.mcp_config.get_config = AsyncMock(
-        return_value={"enabled": True, "token_configured": True}
+        return_value={
+            "enabled": True,
+            "allow_anonymous_local": True,
+            "token_configured": True,
+        }
     )
     services.mcp_config.verify_token = AsyncMock(
         side_effect=lambda token: token == "valid-token"
@@ -330,6 +349,145 @@ async def test_mcp_middleware_uses_main_service_token(monkeypatch) -> None:
     accepted, _ = await call_middleware(middleware, b"Bearer valid-token")
     assert accepted == []
     inner.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_mcp_middleware_requires_token_for_loopback_when_anonymous_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """验证关闭本机匿名访问后回环请求仍需 Bearer Token。"""
+    inner = AsyncMock()
+    middleware = MCPBearerAuthMiddleware(inner)
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={
+            "enabled": True,
+            "allow_anonymous_local": False,
+            "token_configured": False,
+        }
+    )
+    services.mcp_config.verify_token = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    sent, _receive = await call_middleware(
+        middleware,
+        None,
+        client=("127.0.0.1", 50000),
+        host=b"localhost:9090",
+    )
+
+    assert sent[0]["status"] == 401
+    inner.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client", "host", "origin"),
+    [
+        (("127.0.0.1", 50000), b"localhost:9090", None),
+        (("::1", 50000), b"[::1]:9090", b"http://[::1]:9090"),
+        (
+            ("::ffff:127.0.0.1", 50000),
+            b"127.0.0.1:9090",
+            b"http://localhost:9090",
+        ),
+    ],
+)
+async def test_mcp_middleware_allows_direct_loopback_anonymous(
+    monkeypatch: pytest.MonkeyPatch,
+    client: tuple[str, int],
+    host: bytes,
+    origin: bytes | None,
+) -> None:
+    """验证显式开启后 IPv4、IPv6 和映射回环请求可匿名访问。"""
+    inner = AsyncMock()
+    middleware = MCPBearerAuthMiddleware(inner)
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={
+            "enabled": True,
+            "allow_anonymous_local": True,
+            "token_configured": False,
+        }
+    )
+    services.mcp_config.verify_token = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    sent, _receive = await call_middleware(
+        middleware,
+        None,
+        client=client,
+        host=host,
+        origin=origin,
+    )
+
+    assert sent == []
+    inner.assert_awaited_once()
+    services.mcp_config.verify_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("client", "host", "origin", "extra_headers"),
+    [
+        (("192.0.2.10", 50000), b"localhost:9090", None, None),
+        (("127.0.0.1", 50000), b"example.test:9090", None, None),
+        (("127.0.0.1", 50000), b"localhost:9090/invalid", None, None),
+        (
+            ("127.0.0.1", 50000),
+            b"localhost:9090",
+            b"https://example.test",
+            None,
+        ),
+        (
+            ("127.0.0.1", 50000),
+            b"localhost:9090",
+            None,
+            [(b"x-forwarded-for", b"127.0.0.1")],
+        ),
+    ],
+)
+async def test_mcp_middleware_rejects_non_direct_anonymous_requests(
+    monkeypatch: pytest.MonkeyPatch,
+    client: tuple[str, int],
+    host: bytes,
+    origin: bytes | None,
+    extra_headers: list[tuple[bytes, bytes]] | None,
+) -> None:
+    """验证远程、伪造 Host、外部 Origin 和代理请求不能匿名访问。"""
+    inner = AsyncMock()
+    middleware = MCPBearerAuthMiddleware(inner)
+    services = MagicMock()
+    services.mcp_config.get_config = AsyncMock(
+        return_value={
+            "enabled": True,
+            "allow_anonymous_local": True,
+            "token_configured": False,
+        }
+    )
+    services.mcp_config.verify_token = AsyncMock(return_value=False)
+    monkeypatch.setattr(
+        "archive.mcp_server.get_current_services",
+        lambda: services,
+    )
+
+    sent, _receive = await call_middleware(
+        middleware,
+        None,
+        client=client,
+        host=host,
+        origin=origin,
+        extra_headers=extra_headers,
+    )
+
+    assert sent[0]["status"] == 401
+    inner.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -28,7 +28,7 @@ async def test_mcp_token_is_stored_as_hash_and_rotates_immediately(tmp_path) -> 
 
 @pytest.mark.asyncio
 async def test_mcp_runtime_config_uses_safe_defaults(tmp_path) -> None:
-    """验证未配置时 MCP 默认关闭且不包含可用 Token。"""
+    """验证未配置时 MCP 和严格本机匿名访问均默认开启。"""
     store = SQLiteStore(tmp_path / "zhi.sqlite3")
     await store.connect()
     manager = MCPConfigManager(store)
@@ -36,7 +36,8 @@ async def test_mcp_runtime_config_uses_safe_defaults(tmp_path) -> None:
     config = await manager.get_config()
 
     assert config == {
-        "enabled": False,
+        "enabled": True,
+        "allow_anonymous_local": True,
         "token_configured": False,
         "reader_timeout_seconds": 60,
         "max_content_chars": 50_000,

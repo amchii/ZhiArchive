@@ -81,6 +81,7 @@ class MCPConfigResponse(BaseModel):
     """表示主服务对外展示的 MCP 配置。"""
 
     enabled: bool
+    allow_anonymous_local: bool
     token_configured: bool
     reader_timeout_seconds: int
     max_content_chars: int
@@ -90,6 +91,7 @@ class MCPConfigUpdate(BaseModel):
     """表示允许控制台修改的 MCP 配置。"""
 
     enabled: bool
+    allow_anonymous_local: bool | None = None
     reader_timeout_seconds: int = Field(ge=5, le=300)
     max_content_chars: int = Field(ge=1_000, le=500_000)
 
@@ -233,12 +235,9 @@ async def set_mcp_config(payload: MCPConfigUpdate) -> dict[str, Any]:
     Args:
         payload: 新的 MCP 运行配置。
     """
-    manager = get_mcp_config_manager()
-    current = await manager.get_config()
-    if payload.enabled and not current["token_configured"]:
-        raise HTTPException(status_code=409, detail="请先生成 MCP Token")
-    return await manager.update_config(
+    return await get_mcp_config_manager().update_config(
         enabled=payload.enabled,
+        allow_anonymous_local=payload.allow_anonymous_local,
         reader_timeout_seconds=payload.reader_timeout_seconds,
         max_content_chars=payload.max_content_chars,
     )

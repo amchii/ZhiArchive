@@ -115,11 +115,15 @@ Compose 必须固定一个 Uvicorn worker、一个容器副本；用户绕过标
 - monitor 与 archiver 共享的浏览器并发信号量；
 - 用于停止各循环的关闭状态。
 
-MCP Server 作为 FastAPI 下的 Streamable HTTP 子应用运行，使用主服务管理的独立
-Bearer Token。Reader 持有独立 Browser 和有界请求队列，不领取
+MCP Server 作为 FastAPI 下的 Streamable HTTP 子应用运行，默认开启；严格校验后的
+直接本机回环请求也默认允许匿名访问并可关闭，远程请求使用主服务管理的独立 Bearer Token。
+Reader 持有独立 Browser 和有界请求队列，不领取
 `archive_tasks`，也不写回 Playwright storage state。归档产物读取只接受已完成任务
 ID 和受限产物类型，通过与结果浏览器共用的路径解析模块校验作用域、路径穿越和
 符号链接，不向 MCP 调用方开放任意结果路径或服务器文件系统路径。
+
+本机匿名判断无法在 ASGI 层区分直接本机连接与未保留来源头、并把后端 Host 改为回环
+地址的同机反向代理连接。使用反向代理时必须关闭本机匿名访问并使用 Bearer Token。
 
 API 路由直接访问 `AppServices`，不再为每个请求构造临时 Worker 或存储客户端。
 
@@ -196,8 +200,8 @@ MCP Reader 只执行即时内容读取：
 `Archiver`。
 
 认证状态、归档队列和二维码登录工具直接复用 `AppServices` 中现有组件，不通过
-Reader 转发。MCP 开关、正文上限、Reader 超时和 Token 摘要保存在 SQLite 的
-`mcp` 配置域，由主服务配置接口统一控制。
+Reader 转发。MCP 开关、本机匿名访问开关、正文上限、Reader 超时和 Token 摘要保存
+在 SQLite 的 `mcp` 配置域，由主服务配置接口统一控制。
 
 ## 6. SQLite 数据模型
 
